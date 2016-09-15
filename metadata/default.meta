@@ -2,11 +2,12 @@
 []
 access = read : [ * ], write : [ admin ]
 
-[alert_actions/send_to_workato]
+[alert_actions/workato]
 export = system
 
 [alerts]
 export = system
 
-[subscriptions]
+[savedsearches]
+access = read : [ * ], write : [ admin, power ]
 export = system

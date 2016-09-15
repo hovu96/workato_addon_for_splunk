@@ -10,7 +10,7 @@ from splunklib.binding import namespace as namespace
 import base64
 import random
 
-class SavedSearchesHandler(splunk.rest.BaseRestHandler):
+class BaseRestHandler(splunk.rest.BaseRestHandler):
     def create_service(self,management_url):
         scheme, host, port, path = spliturl(management_url)
         self.response.setStatus(200)
@@ -25,13 +25,3 @@ class SavedSearchesHandler(splunk.rest.BaseRestHandler):
             host=host)
         s.login()
         return s
-    def handle_GET(self):
-        self.request['payload'] = '{"management_url": "https://127.0.0.1:8089/"}'
-        payload = json.loads(self.request['payload'])
-        s = self.create_service(payload['management_url'])
-        saved_searches = s.saved_searches.list()
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps(
-            [ search.name for search in saved_searches ]
-        ))
