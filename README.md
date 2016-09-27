@@ -13,7 +13,7 @@ Features:
 
 Until now, this add-on is not published on [Splunkbase](splunkbase.splunk.com). But that will change in future.
 
-Currently, this add-on is available on [GitHub](https://github.com/hovu96/workato_addon_for_splunk) only. Once you cloned the repository or download as ZIP, proceed installation *only* on the Splunk Search Head as described in the [Docs](http://docs.splunk.com/Documentation/AddOns/released/Overview/Distributedinstall#Search_heads).
+Currently, this add-on is available on [GitHub](https://github.com/hovu96/workato_addon_for_splunk) only. Once you clone the repository or download as ZIP, proceed installation *only* on the Splunk Search Head as described in the [Docs](http://docs.splunk.com/Documentation/AddOns/released/Overview/Distributedinstall#Search_heads).
 
 As this add-on provides Splunk REST API endpoints for Workato, the Splunk Search Head's management port (by default, 8089) must be available for incoming HTTP/S requests.
 
