@@ -11,18 +11,18 @@ import base64
 import random
 from base_handler import BaseRestHandler
 
+workato_app_name = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
+
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
         self.request['payload'] = '{"management_url": "https://127.0.0.1:8089/"}'
         payload = json.loads(self.request['payload'])
         s = self.create_service(payload['management_url'])
-        saved_searches = s.saved_searches.list(
-            search="is_scheduled=1"
-        )
+        saved_searches = s.saved_searches.list(search="is_scheduled=1")
         self.response.setStatus(200)
         self.response.setHeader('content-type', 'application/json')
         self.response.write(json.dumps(
-            [ search.name for search in saved_searches ]
+            [ search.name for search in saved_searches if search.access.app!=workato_app_name ]
         ))
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
