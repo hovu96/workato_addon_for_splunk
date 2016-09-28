@@ -16,7 +16,6 @@ callback_search_param = 'action.workato.param.callback_url'
 
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
-        payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=1")
         self.response.setStatus(200)
