@@ -12,6 +12,7 @@ import random
 from base_handler import BaseRestHandler
 
 workato_app_name = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
+callback_search_param = 'action.workato.param.callback_url'
 
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
@@ -27,12 +28,12 @@ class ScheduledSearchesHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
-        if 'action.workato.param.callback_url' in saved_search.content:
-            if saved_search['action.workato.param.callback_url']:
-                raise Exception('other endpoint (%s) already registered' % saved_search['action.workato.param.callback_url'])
+        if callback_search_param in saved_search.content:
+            if saved_search[callback_search_param]:
+                raise Exception('other endpoint (%s) already registered' % saved_search['callback_search_param'])
         kwargs = {
             "actions": "workato",
-            "action.workato.param.callback_url": payload['callback_url'],
+            callback_search_param: payload['callback_url'],
             }
         saved_search.update(**kwargs)
         self.response.setStatus(200)
@@ -44,12 +45,12 @@ class ScheduledSearchesHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
-        if 'action.workato.param.callback_url' in saved_search.content:
-            if saved_search['action.workato.param.callback_url'] != payload['callback_url']:
-                raise Exception('other endpoint (%s) already registered' % saved_search['action.workato.param.callback_url'])
+        if callback_search_param in saved_search.content:
+            if saved_search[callback_search_param] != payload['callback_url']:
+                raise Exception('other endpoint (%s) already registered' % saved_search[callback_search_param])
         kwargs = {
             "actions": "",
-            "action.workato.param.callback_url": "",
+            callback_search_param: "",
             }
         saved_search.update(**kwargs)
         self.response.setStatus(200)
