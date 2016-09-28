@@ -11,7 +11,8 @@ import base64
 import random
 
 class BaseRestHandler(splunk.rest.BaseRestHandler):
-    def create_service(self,management_url):
+    def create_service(self):
+        management_url = "https://"+self.request["headers"]["host"]+"/"
         scheme, host, port, path = spliturl(management_url)
         self.response.setStatus(200)
         self.response.setHeader('content-type', 'application/json')

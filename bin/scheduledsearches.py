@@ -15,9 +15,8 @@ workato_app_name = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
 
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
-        self.request['payload'] = '{"management_url": "https://127.0.0.1:8089/"}'
         payload = json.loads(self.request['payload'])
-        s = self.create_service(payload['management_url'])
+        s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=1")
         self.response.setStatus(200)
         self.response.setHeader('content-type', 'application/json')
@@ -26,12 +25,11 @@ class ScheduledSearchesHandler(BaseRestHandler):
         ))
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
-        s = self.create_service(payload['management_url'])
+        s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
         if 'action.workato.param.callback_url' in saved_search.content:
             if saved_search['action.workato.param.callback_url']:
                 raise Exception('other endpoint (%s) already registered' % saved_search['action.workato.param.callback_url'])
-        #saved_search = s.saved_searches[payload['search_name'], client.namespace(app='workato', sharing='app')]
         kwargs = {
             "actions": "workato",
             "action.workato.param.callback_url": payload['callback_url'],
@@ -44,8 +42,7 @@ class ScheduledSearchesHandler(BaseRestHandler):
         }))
     def handle_DELETE(self):
         payload = json.loads(self.request['payload'])
-        s = self.create_service(payload['management_url'])
-        #saved_search = s.saved_searches[payload['search_name'], client.namespace(app='workato', sharing='app')]
+        s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
         if 'action.workato.param.callback_url' in saved_search.content:
             if saved_search['action.workato.param.callback_url'] != payload['callback_url']:
