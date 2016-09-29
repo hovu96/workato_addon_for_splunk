@@ -9,7 +9,7 @@ from splunklib.binding import _spliturl as spliturl
 from splunklib.binding import namespace as namespace
 import base64
 import random
-from base_handler import BaseRestHandler
+from .base_handler import BaseRestHandler
 from .utils import workato_app_name
 from .alert_action_utils import has_callback, add_callback, remove_callback
 
