@@ -11,8 +11,8 @@ import base64
 import random
 from base_handler import BaseRestHandler
 
-workato_app_name = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
 callback_search_param = 'action.workato.param.callback_url'
+from .utils import workato_app_name
 
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
