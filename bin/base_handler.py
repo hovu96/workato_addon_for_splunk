@@ -2,7 +2,7 @@ from splunk import auth, search
 import splunk.rest
 import logging as logger
 import splunk.bundle as bundle
-import httplib2, urllib, urllib2, os, time
+import httplib2, urllib, urllib2
 import json
 import splunklib.client as client
 from splunklib.binding import _spliturl as spliturl
