@@ -9,13 +9,8 @@ from splunklib.binding import _spliturl as spliturl
 from splunklib.binding import namespace as namespace
 import base64
 import random
+from .utils import Request
 
-
-class Request(urllib2.Request):
-    def set_method(self,method):
-        self.__method=method
-    def get_method(self):
-        return self.__method
 
 class BaseRestHandler(splunk.rest.BaseRestHandler):
     def create_service(self):
