@@ -53,3 +53,6 @@ class ScheduledSearchesHandler(BaseRestHandler):
             }
         saved_search.update(**kwargs)
         self.response.setStatus(200)
+        self.response.setHeader('content-type', 'application/json')
+        self.response.write(json.dumps({
+        }))
