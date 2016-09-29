@@ -10,9 +10,8 @@ from splunklib.binding import namespace as namespace
 import base64
 import random
 from base_handler import BaseRestHandler
-
-callback_search_param = 'action.workato.param.callback_url'
 from .utils import workato_app_name
+from .alert_action_utils import has_callback, add_callback, remove_callback
 
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
@@ -27,14 +26,9 @@ class ScheduledSearchesHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
-        if callback_search_param in saved_search.content:
-            if saved_search[callback_search_param]:
-                raise Exception('other endpoint (%s) already registered' % saved_search['callback_search_param'])
-        kwargs = {
-            "actions": "workato",
-            callback_search_param: payload['callback_url'],
-            }
-        saved_search.update(**kwargs)
+        if has_callback(saved_search):
+            raise Exception('another callback already registered')
+        add_callback(saved_search, payload['callback_url'])
         self.response.setStatus(200)
         self.response.setHeader('content-type', 'application/json')
         self.response.write(json.dumps({
@@ -44,14 +38,7 @@ class ScheduledSearchesHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
-        if callback_search_param in saved_search.content:
-            if saved_search[callback_search_param] != payload['callback_url']:
-                raise Exception('other endpoint (%s) already registered' % saved_search[callback_search_param])
-        kwargs = {
-            "actions": "",
-            callback_search_param: "",
-            }
-        saved_search.update(**kwargs)
+        remove_callback(saved_search, payload['callback_url'])
         self.response.setStatus(200)
         self.response.setHeader('content-type', 'application/json')
         self.response.write(json.dumps({
