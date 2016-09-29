@@ -11,7 +11,6 @@ import base64
 import random
 from .utils import Request
 
-
 class BaseRestHandler(splunk.rest.BaseRestHandler):
     def create_service(self):
         management_url = "https://"+self.request["headers"]["host"]+"/"
