@@ -1,14 +1,4 @@
-from splunk import auth, search
-import splunk.rest
-import logging as logger
-import splunk.bundle as bundle
-import httplib2, urllib, os, time
 import json
-import splunklib.client as client
-from splunklib.binding import _spliturl as spliturl
-from splunklib.binding import namespace as namespace
-import base64
-import random
 from .base_handler import BaseRestHandler
 from .utils import workato_app_name
 from .alert_action_utils import has_callback, add_callback, remove_callback
