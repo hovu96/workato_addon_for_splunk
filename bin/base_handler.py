@@ -15,8 +15,6 @@ class BaseRestHandler(splunk.rest.BaseRestHandler):
     def create_service(self):
         management_url = "https://"+self.request["headers"]["host"]+"/"
         scheme, host, port, path = spliturl(management_url)
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
         token = self.request["headers"].get("authorization", "")[6:]
         username, password = base64.b64decode(token).split(':')
         s = client.Service(
