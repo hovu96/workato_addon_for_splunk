@@ -14,13 +14,11 @@ class ServiceAlertsHandler(BaseRestHandler):
     def handle_GET(self):
         search = self.get_search()
         subscribed = has_callback(search)
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps({
+        self.send_json_response({
             "subscribed": subscribed,
             "is_scheduled": search.is_scheduled,
             "disabled": search.disabled,
-        }))
+        })
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
          subscribe_response = self.call_json_service(
@@ -33,9 +31,7 @@ class ServiceAlertsHandler(BaseRestHandler):
         )
         search = self.get_search()
         search.enable()
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps(subscribe_response))
+        self.send_json_response(subscribe_response)
     def handle_DELETE(self):
         payload = json.loads(self.request['payload'])
         unsubscribe_response = self.call_json_service(
@@ -48,6 +44,4 @@ class ServiceAlertsHandler(BaseRestHandler):
         )
         search = self.get_search()
         search.disable()
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps(unsubscribe_response))
+        self.send_json_response(unsubscribe_response)

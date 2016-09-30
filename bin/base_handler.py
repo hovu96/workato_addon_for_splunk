@@ -39,3 +39,7 @@ class BaseRestHandler(splunk.rest.BaseRestHandler):
             raise Exception('response code %s' % res.code)
         body = res.read()
         return json.loads(body)
+    def send_json_response(self,object):
+        self.response.setStatus(200)
+        self.response.setHeader('content-type', 'application/json')
+        self.response.write(json.dumps(object))

@@ -7,11 +7,9 @@ class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
         s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=1")
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps(
+        self.send_json_response(
             [ search.name for search in saved_searches if search.access.app!=workato_app_name ]
-        ))
+        )
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
@@ -19,17 +17,12 @@ class ScheduledSearchesHandler(BaseRestHandler):
         if has_callback(saved_search):
             raise Exception('another callback already registered')
         add_callback(saved_search, payload['callback_url'])
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps({
+        self.send_json_response({
             "id": payload['callback_url']
-        }))
+        })
     def handle_DELETE(self):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
         remove_callback(saved_search, payload['callback_url'])
-        self.response.setStatus(200)
-        self.response.setHeader('content-type', 'application/json')
-        self.response.write(json.dumps({
-        }))
+        self.send_json_response({})
