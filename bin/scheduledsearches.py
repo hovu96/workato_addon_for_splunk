@@ -7,8 +7,14 @@ class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
         s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=1")
+        def filter(search):
+            if search.access.app==workato_app_name:
+                return False
+            if search.name.startswith("__"):
+                return False
+            return True
         self.send_json_response(
-            [ search.name for search in saved_searches if search.access.app!=workato_app_name ]
+            [ search.name for search in saved_searches if filter(search) ]
         )
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
