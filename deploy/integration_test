@@ -1,0 +1,21 @@
+#!/bin/bash
+#set -x
+DEPLOY_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd $DEPLOY_DIR
+
+cd ../..
+tar -zcf $DEPLOY_DIR/integration_test.spl --exclude='workato_addon_for_splunk/private' --exclude='workato_addon_for_splunk/deploy' --exclude='workato_addon_for_splunk/.git' -X workato_addon_for_splunk/.gitignore workato_addon_for_splunk
+cd $DEPLOY_DIR
+tar xvf integration_test.spl > /dev/null 2>&1
+rm integration_test.spl
+TEST_ADDON_PATH="$DEPLOY_DIR/workato_addon_for_splunk"
+TEST_APP_PATH="$DEPLOY_DIR/test_app"
+
+NETWORK_NAME="workato-integration-test"
+NETWORK_ID=$(docker network create $NETWORK_NAME)
+CONTAINER_ID=$(docker run --name splunk --network $NETWORK_NAME -d -e "SPLUNK_START_ARGS=--accept-license" -e "SPLUNK_CMD=edit user admin -password admin -auth admin:changeme" -v $TEST_ADDON_PATH:/opt/splunk/etc/apps/workato_addon_for_splunk:rw -v $TEST_APP_PATH:/opt/splunk/etc/apps/test_app:rw splunk/splunk:latest)
+docker run --network $NETWORK_NAME -it --rm -v "$PWD":/usr/src/myapp -w /usr/src/myapp python:2.7 python integration_test.py splunk 8089
+docker rm -fv $CONTAINER_ID > /dev/null 2>&1
+docker network rm $NETWORK_ID > /dev/null 2>&1
+
+rm -rf $TEST_ADDON_PATH
