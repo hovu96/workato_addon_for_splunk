@@ -24,7 +24,8 @@ class ScheduledSearchesHandler(BaseRestHandler):
             raise Exception('another callback already registered')
         add_callback(saved_search, payload['callback_url'])
         self.send_json_response({
-            "id": payload['callback_url']
+            "search_name": payload['search_name'],
+            "callback_url": payload['callback_url'],
         })
     def handle_DELETE(self):
         payload = json.loads(self.request['payload'])
