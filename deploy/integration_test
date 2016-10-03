@@ -1,24 +1,34 @@
 #!/bin/bash
 #set -x
 DEPLOY_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DEPLOY_DIR"
+
+TEST_PATH="$DEPLOY_DIR/test/"
+
+TEMP_DIR="$DEPLOY_DIR/temp"
+rm -rf "$TEMP_DIR"
+mkdir "$TEMP_DIR"
+
+TEST_ADDON_PACKAGE_PATH="$TEMP_DIR/integration_test.spl"
+TEST_ADDON_PATH="$TEMP_DIR/workato_addon_for_splunk"
+cd ../..
+tar -zcf $TEST_ADDON_PACKAGE_PATH --exclude='workato_addon_for_splunk/private' --exclude='workato_addon_for_splunk/deploy' --exclude='workato_addon_for_splunk/.git' -X workato_addon_for_splunk/.gitignore workato_addon_for_splunk
+cd $TEMP_DIR
+tar xvf $TEST_ADDON_PACKAGE_PATH > /dev/null 2>&1
 cd $DEPLOY_DIR
 
-cd ../..
-tar -zcf $DEPLOY_DIR/integration_test.spl --exclude='workato_addon_for_splunk/private' --exclude='workato_addon_for_splunk/deploy' --exclude='workato_addon_for_splunk/.git' -X workato_addon_for_splunk/.gitignore workato_addon_for_splunk
-cd $DEPLOY_DIR
-tar xvf integration_test.spl > /dev/null 2>&1
-rm integration_test.spl
-TEST_ADDON_PATH="$DEPLOY_DIR/workato_addon_for_splunk"
-TEST_APP_PATH="$DEPLOY_DIR/test_app"
+TEST_APP_PATH="$TEMP_DIR/test_app"
+cp -r $DEPLOY_DIR/test_app $TEST_APP_PATH
 
 NETWORK_NAME="workato-integration-test"
-NETWORK_ID=$(docker network create $NETWORK_NAME)
-CONTAINER_ID=$(docker run --name splunk --network $NETWORK_NAME -d -e "SPLUNK_START_ARGS=--accept-license" -e "SPLUNK_CMD=edit user admin -password admin -auth admin:changeme" -v $TEST_ADDON_PATH:/opt/splunk/etc/apps/workato_addon_for_splunk:rw -v $TEST_APP_PATH:/opt/splunk/etc/apps/test_app:rw splunk/splunk:latest)
-docker run --network $NETWORK_NAME -it --rm -v "$PWD":/usr/src/myapp -w /usr/src/myapp python:2.7 python integration_test.py splunk 8089
+docker network create $NETWORK_NAME > /dev/null 2>&1
+docker rm -fv workato_splunk > /dev/null 2>&1
+CONTAINER_ID=$(docker run -p 8000:8000 --name workato_splunk --network $NETWORK_NAME -d -e "SPLUNK_START_ARGS=--accept-license" -e "SPLUNK_CMD=edit user admin -password admin -auth admin:changeme" -v $TEST_ADDON_PATH:/opt/splunk/etc/apps/workato_addon_for_splunk:rw -v $TEST_APP_PATH:/opt/splunk/etc/apps/test_app:rw splunk/splunk:latest)
+docker rm -fv workato_test > /dev/null 2>&1
+docker run --name workato_test --network $NETWORK_NAME -it --rm -v $TEST_PATH:/usr/src/myapp -w /usr/src/myapp python:2.7 python integration_test.py workato_splunk 8089 workato_test
 
-read -p "Press [Enter] exit..."
+read -p "Done! Press [Enter] to cleanup..."
 
-docker rm -fv $CONTAINER_ID > /dev/null 2>&1
-docker network rm $NETWORK_ID > /dev/null 2>&1
-
-rm -rf $TEST_ADDON_PATH
+docker rm -fv "$CONTAINER_ID" > /dev/null 2>&1
+docker network rm "$NETWORK_NAME" > /dev/null 2>&1
+rm -rf $TEMP_DIR

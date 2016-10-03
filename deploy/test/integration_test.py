@@ -3,6 +3,7 @@ import splunklib.client as client
 
 splunk_host = sys.argv[1]
 splunk_port = sys.argv[2]
+test_host = sys.argv[3]
 
 s = client.Service(
     username="admin",
@@ -73,12 +74,14 @@ if "realtime_alert" not in searches:
 
 print "starting server  ..."
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+received_events={}
 class MyCallbackHandler(BaseHTTPRequestHandler):
-	def do_POST(self):
-		self.send_response(200)
-		self.send_header('Content-type','text/html')
-		self.end_headers()
-		self.wfile.write("Hello World !")
+    def do_POST(self):
+        self.send_response(200)
+        received_events['test'] = []
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write("Hello World !")
 server_address = ('', 80)
 server = HTTPServer(server_address, MyCallbackHandler)
 server.timeout = 1
@@ -86,11 +89,16 @@ server.timeout = 1
 print "subscribing  ..."
 unsubscribe_payload = call_workato_addon("scheduledsearches","POST",{
     "search_name": "realtime_alert",
-    "callback_url": ""
+    "callback_url": "http://%s/bla" % (test_host)
 })
 
-print "handling request ???"
-server.handle_request()
+index = s.indexes['main']
+while not "test" in received_events:
+    print "sending new event ..."
+    with index.attached_socket(sourcetype='test') as sock:
+        sock.send('Test event\\r\\n')
+    print "waiting for event ..."
+    server.handle_request()
 
 print "unsubscribing  ..."
 call_workato_addon("scheduledsearches","DELETE",unsubscribe_payload)
