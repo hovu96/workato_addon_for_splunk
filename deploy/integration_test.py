@@ -71,11 +71,26 @@ searches = call_workato_addon("scheduledsearches","GET",None)
 if "realtime_alert" not in searches:
     raise Exception("missing search 'realtime_alert'")
 
+print "starting server  ..."
+from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+class MyCallbackHandler(BaseHTTPRequestHandler):
+	def do_POST(self):
+		self.send_response(200)
+		self.send_header('Content-type','text/html')
+		self.end_headers()
+		self.wfile.write("Hello World !")
+server_address = ('', 80)
+server = HTTPServer(server_address, MyCallbackHandler)
+server.timeout = 1
+
 print "subscribing  ..."
 unsubscribe_payload = call_workato_addon("scheduledsearches","POST",{
     "search_name": "realtime_alert",
     "callback_url": ""
 })
+
+print "handling request ???"
+server.handle_request()
 
 print "unsubscribing  ..."
 call_workato_addon("scheduledsearches","DELETE",unsubscribe_payload)
