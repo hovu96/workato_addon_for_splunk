@@ -1,7 +1,7 @@
 import json
 from .base_handler import BaseRestHandler
 from .utils import workato_app_name
-from .alert_action_utils import has_callback, add_callback, remove_callback
+from .alert_action_utils import has_callback, add_callback, remove_callback, has_workato_alert_action
 
 class ScheduledSearchesHandler(BaseRestHandler):
     def handle_GET(self):
@@ -12,7 +12,7 @@ class ScheduledSearchesHandler(BaseRestHandler):
                 return False
             if search.name.startswith("__"):
                 return False
-            return True
+            return has_workato_alert_action(search)
         self.send_json_response(
             [ search.name for search in saved_searches if filter(search) ]
         )
