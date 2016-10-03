@@ -9,7 +9,7 @@ from splunklib.binding import _spliturl as spliturl
 from splunklib.binding import namespace as namespace
 import base64
 import random
-from .utils import Request
+from .utils import Request, call_json_service
 
 class BaseRestHandler(splunk.rest.BaseRestHandler):
     def create_service(self):
@@ -25,18 +25,9 @@ class BaseRestHandler(splunk.rest.BaseRestHandler):
             host=host)
         s.login()
         return s
-    def call_json_service(self,method,path,payload):
+    def call_json_service(self, method, path, payload):
         management_url = "https://"+self.request["headers"]["host"]+path
-        req = Request(management_url, json.dumps(payload), {
-            "Content-Type": "application/json",
-            "Authorization": self.request["headers"].get("authorization", ""),
-        })
-        req.set_method(method)
-        res = urllib2.urlopen(req)
-        if res.code!=200:
-            raise Exception('response code %s' % res.code)
-        body = res.read()
-        return json.loads(body)
+        return call_json_service(management_url, method, payload, self.request["headers"].get("authorization", ""))
     def send_json_response(self,object):
         self.response.setStatus(200)
         self.response.setHeader('content-type', 'application/json')
