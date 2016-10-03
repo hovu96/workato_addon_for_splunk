@@ -68,7 +68,7 @@ print "ES %s" % (version["es_version"] if version["es_version"] else "not instal
 print "Add-on %s" % version["workato_version"]
 
 print "getting scheduled searches ..."
-searches = call_workato_addon("scheduledsearches","GET",None)
+searches = call_workato_addon("alerts","GET",None)
 if "realtime_alert" not in searches:
     raise Exception("missing search 'realtime_alert'")
 
@@ -87,7 +87,7 @@ server = HTTPServer(server_address, MyCallbackHandler)
 server.timeout = 1
 
 print "subscribing  ..."
-unsubscribe_payload = call_workato_addon("scheduledsearches","POST",{
+unsubscribe_payload = call_workato_addon("alerts","POST",{
     "search_name": "realtime_alert",
     "callback_url": "http://%s/bla" % (test_host)
 })
@@ -101,6 +101,6 @@ while not "test" in received_events:
     server.handle_request()
 
 print "unsubscribing  ..."
-call_workato_addon("scheduledsearches","DELETE",unsubscribe_payload)
+call_workato_addon("alerts","DELETE",unsubscribe_payload)
 
 print "done"
