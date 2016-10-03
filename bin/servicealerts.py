@@ -21,7 +21,7 @@ class ServiceAlertsHandler(BaseRestHandler):
         })
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
-         subscribe_response = self.call_json_service(
+        subscribe_response = self.call_json_service(
             "POST",
             "/services/workato/scheduledsearches",
             {
@@ -37,10 +37,7 @@ class ServiceAlertsHandler(BaseRestHandler):
         unsubscribe_response = self.call_json_service(
             "DELETE",
             "/services/workato/scheduledsearches",
-            {
-            "callback_url": payload["callback_url"],
-            "search_name": service_alert_name
-            }
+            payload
         )
         search = self.get_search()
         search.disable()

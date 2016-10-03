@@ -1,4 +1,4 @@
-import sys, os, urllib2, time, json, ssl, base64
+import sys, os, urllib2, time, json, ssl, base64, random
 import splunklib.client as client
 
 splunk_host = sys.argv[1]
@@ -12,20 +12,14 @@ s = client.Service(
     scheme="https",
     host=splunk_host)
 
-print "logging in ..."
-e = None
-remaining = 30
-while remaining>0:
-    time.sleep(1)
+while True:
+    print "logging in ..."
     try:
         s.login()
         e = None
         break
-    except Exception, _e:
-        e=_e
-    remaining -= 1
-if e:
-    raise e
+    except:
+        time.sleep(1)
 
 class Request(urllib2.Request):
     def set_method(self,method):
@@ -77,23 +71,33 @@ from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 received_events={}
 class MyCallbackHandler(BaseHTTPRequestHandler):
     def do_POST(self):
+        content_len = int(self.headers.getheader('content-length', 0))
+        post_body = self.rfile.read(content_len)
         self.send_response(200)
-        received_events['test'] = []
-        self.send_header('Content-type', 'text/html')
+        #print "Received event on %s"%(self.path)
+        received_events[self.path].append(post_body)
         self.end_headers()
-        self.wfile.write("Hello World !")
+        self.wfile.write("")
 server_address = ('', 80)
 server = HTTPServer(server_address, MyCallbackHandler)
 server.timeout = 1
 
-print "subscribing  ..."
-unsubscribe_payload = call_workato_addon("alerts","POST",{
-    "search_name": "realtime_alert",
-    "callback_url": "http://%s/bla" % (test_host)
-})
+def subscribe_alert(name):
+    callback_path = "/%s" % (random.random())
+    received_events[callback_path] = []
+    return call_workato_addon("alerts","POST",{
+        "search_name": name,
+        "callback_url": "http://%s%s" % (test_host, callback_path)
+    }), callback_path
+
+def unsubscribe_alert(name, payload):
+    return call_workato_addon("alerts","DELETE",payload)
+
+print "subscribing ..."
+subscription, key = subscribe_alert('realtime_alert')
 
 index = s.indexes['main']
-while not "test" in received_events:
+while len(received_events[key])==0:
     print "sending new event ..."
     with index.attached_socket(sourcetype='test') as sock:
         sock.send('Test event\\r\\n')
@@ -101,6 +105,8 @@ while not "test" in received_events:
     server.handle_request()
 
 print "unsubscribing  ..."
-call_workato_addon("alerts","DELETE",unsubscribe_payload)
+unsubscribe_alert('realtime_alert',subscription)
+
+#searches = call_workato_addon("servicealerts","GET",None)
 
 print "done"
