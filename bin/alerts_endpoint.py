@@ -3,7 +3,7 @@ from .base_handler import BaseRestHandler
 from .utils import workato_app_name
 from .alert_action_utils import has_callback, add_callback, remove_callback, has_workato_alert_action
 
-class ScheduledSearchesHandler(BaseRestHandler):
+class AlertsHandler(BaseRestHandler):
     def handle_GET(self):
         s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=1")
