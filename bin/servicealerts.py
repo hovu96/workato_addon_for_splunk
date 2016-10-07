@@ -23,7 +23,7 @@ class ServiceAlertsHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         subscribe_response = self.call_json_service(
             "POST",
-            "/services/workato/scheduledsearches",
+            "/services/workato/alerts",
             {
             "callback_url": payload["callback_url"],
             "search_name": service_alert_name
@@ -36,7 +36,7 @@ class ServiceAlertsHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         unsubscribe_response = self.call_json_service(
             "DELETE",
-            "/services/workato/scheduledsearches",
+            "/services/workato/alerts",
             payload
         )
         search = self.get_search()
