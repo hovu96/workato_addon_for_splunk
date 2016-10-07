@@ -12,8 +12,8 @@ s = client.Service(
     scheme="https",
     host=splunk_host)
 
+print "logging in ..."
 while True:
-    print "logging in ..."
     try:
         s.login()
         e = None
@@ -93,20 +93,71 @@ def subscribe_alert(name):
 def unsubscribe_alert(name, payload):
     return call_workato_addon("alerts","DELETE",payload)
 
-print "subscribing ..."
-subscription, key = subscribe_alert('realtime_alert')
+print "subscribing realtime alert ..."
+unsubscribe_data, subscription_key = subscribe_alert('realtime_alert')
 
+print "Sending and waiting for events ..."
 index = s.indexes['main']
-while len(received_events[key])==0:
-    print "sending new event ..."
+while len(received_events[subscription_key])==0:
     with index.attached_socket(sourcetype='test') as sock:
         sock.send('Test event\\r\\n')
-    print "waiting for event ..."
     server.handle_request()
 
-print "unsubscribing  ..."
-unsubscribe_alert('realtime_alert',subscription)
+print "unsubscribing realtime alert ..."
+unsubscribe_alert('realtime_alert', unsubscribe_data)
 
-#searches = call_workato_addon("servicealerts","GET",None)
+print "checking service alerts status ..."
+service_alerts_search = s.saved_searches['IT Service Alerts']
+if not service_alerts_search.disabled == "1":
+    raise Exception("service alerts not disabled")
+servicealerts_info = call_workato_addon("servicealerts","GET",None)
+print servicealerts_info
+if servicealerts_info['disabled'] == "0":
+    raise Exception("service alerts not disabled")
+if not servicealerts_info['is_scheduled'] == "1":
+    raise Exception("service alerts not scheduled")
+if servicealerts_info['subscribed'] is True:
+    raise Exception("somebody already subscribed for service alerts")
+
+def subscribe_service_alert():
+    callback_path = "/%s" % (random.random())
+    received_events[callback_path] = []
+    return call_workato_addon("servicealerts","POST",{
+        "callback_url": "http://%s%s" % (test_host, callback_path)
+    }), callback_path
+
+def unsubscribe_service_alert(payload):
+    return call_workato_addon("servicealerts","DELETE",payload)
+
+print "subscribing service alert ..."
+unsubscribe_data, subscription_key = subscribe_service_alert()
+
+print "checking service alerts status ..."
+servicealerts_info = call_workato_addon("servicealerts","GET",None)
+if servicealerts_info['disabled'] == "1":
+    raise Exception("service alerts disabled")
+if servicealerts_info['subscribed'] is False:
+    raise Exception("somebody already subscribed for service alerts")
+
+print "creating service alert ..."
+index = s.indexes['itsi_tracked_alerts']
+with index.attached_socket(sourcetype='test') as sock:
+    sock.send('event_id="event_id" severity="severity" title="title" severity_label="severity_label" description="description"\\r\\n')
+
+print "waiting for service alert ..."
+while len(received_events[subscription_key])==0:
+    server.handle_request()
+service_alert = received_events[subscription_key][0]
+#print service_alert
+
+print "unsubscribing service alert ..."
+unsubscribe_service_alert(unsubscribe_data)
+
+print "checking service alerts status ..."
+servicealerts_info = call_workato_addon("servicealerts","GET",None)
+if servicealerts_info['disabled'] == "1":
+    raise Exception("service alerts disabled")
+if servicealerts_info['subscribed'] is False:
+    raise Exception("somebody already subscribed for service alerts")
 
 print "done"
