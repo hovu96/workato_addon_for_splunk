@@ -68,9 +68,12 @@ if "realtime_alert" not in searches:
 
 print "starting server  ..."
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
-received_events={}
+received_events = {}
+just_received_request = False
 class MyCallbackHandler(BaseHTTPRequestHandler):
     def do_POST(self):
+        global just_received_request
+        just_received_request = True
         content_len = int(self.headers.getheader('content-length', 0))
         post_body = self.rfile.read(content_len)
         self.send_response(200)
@@ -82,8 +85,16 @@ server_address = ('', 80)
 server = HTTPServer(server_address, MyCallbackHandler)
 server.timeout = 1
 
+def handle_server_requests():
+    global just_received_request
+    while True:
+        just_received_request = False
+        server.handle_request()
+        if not just_received_request:
+            break
+
 def subscribe_alert(name):
-    callback_path = "/%s" % (random.random())
+    callback_path = "/%s_%s" % (name, random.random())
     received_events[callback_path] = []
     return call_workato_addon("alerts","POST",{
         "search_name": name,
@@ -101,17 +112,18 @@ index = s.indexes['main']
 while len(received_events[subscription_key])==0:
     with index.attached_socket(sourcetype='test') as sock:
         sock.send('Test event\\r\\n')
-    server.handle_request()
+    handle_server_requests()
 
 print "unsubscribing realtime alert ..."
 unsubscribe_alert('realtime_alert', unsubscribe_data)
+
+handle_server_requests()
 
 print "checking service alerts status ..."
 service_alerts_search = s.saved_searches['IT Service Alerts']
 if not service_alerts_search.disabled == "1":
     raise Exception("service alerts not disabled")
 servicealerts_info = call_workato_addon("servicealerts","GET",None)
-print servicealerts_info
 if servicealerts_info['disabled'] == "0":
     raise Exception("service alerts not disabled")
 if not servicealerts_info['is_scheduled'] == "1":
@@ -119,8 +131,10 @@ if not servicealerts_info['is_scheduled'] == "1":
 if servicealerts_info['subscribed'] is True:
     raise Exception("somebody already subscribed for service alerts")
 
+handle_server_requests()
+
 def subscribe_service_alert():
-    callback_path = "/%s" % (random.random())
+    callback_path = "/servicealert_%s" % (random.random())
     received_events[callback_path] = []
     return call_workato_addon("servicealerts","POST",{
         "callback_url": "http://%s%s" % (test_host, callback_path)
@@ -132,6 +146,8 @@ def unsubscribe_service_alert(payload):
 print "subscribing service alert ..."
 unsubscribe_data, subscription_key = subscribe_service_alert()
 
+handle_server_requests()
+
 print "checking service alerts status ..."
 servicealerts_info = call_workato_addon("servicealerts","GET",None)
 if servicealerts_info['disabled'] == "1":
@@ -139,10 +155,14 @@ if servicealerts_info['disabled'] == "1":
 if servicealerts_info['subscribed'] is False:
     raise Exception("somebody already subscribed for service alerts")
 
+handle_server_requests()
+
 print "creating service alert ..."
 index = s.indexes['itsi_tracked_alerts']
 with index.attached_socket(sourcetype='test') as sock:
     sock.send('event_id="event_id" severity="severity" title="title" severity_label="severity_label" description="description"\\r\\n')
+
+handle_server_requests()
 
 print "waiting for service alert ..."
 while len(received_events[subscription_key])==0:
@@ -150,14 +170,34 @@ while len(received_events[subscription_key])==0:
 service_alert = received_events[subscription_key][0]
 #print service_alert
 
+handle_server_requests()
+
 print "unsubscribing service alert ..."
 unsubscribe_service_alert(unsubscribe_data)
 
+handle_server_requests()
+
 print "checking service alerts status ..."
 servicealerts_info = call_workato_addon("servicealerts","GET",None)
-if servicealerts_info['disabled'] == "1":
-    raise Exception("service alerts disabled")
-if servicealerts_info['subscribed'] is False:
+if servicealerts_info['disabled'] == "0":
+    raise Exception("service alerts enabled")
+if servicealerts_info['subscribed'] is True:
     raise Exception("somebody already subscribed for service alerts")
+
+handle_server_requests()
+
+print "subscribing service alert (#1) ..."
+unsubscribe_data_1, _ = subscribe_service_alert()
+
+#service_alerts_search = s.saved_searches['IT Service Alerts']
+#if not service_alerts_search.disabled == "0":
+#    raise Exception("service alert search not enabled")
+#
+#if callback_search_param in saved_search.content:
+#    if saved_search[callback_search_param] != callback_url:
+#s.
+
+print "unsubscribing service alert (#1) ..."
+unsubscribe_service_alert(unsubscribe_data_1)
 
 print "done"
