@@ -1,7 +1,7 @@
 import json
 from .base_handler import BaseRestHandler
 from .utils import workato_app_name
-from .alert_action_utils import has_callback
+from .alert_action_utils import get_callback_count
 
 service_alert_name = 'IT Service Alerts'
 
@@ -13,9 +13,8 @@ class ServiceAlertsHandler(BaseRestHandler):
         return search
     def handle_GET(self):
         search = self.get_search()
-        subscribed = has_callback(search)
         self.send_json_response({
-            "subscribed": subscribed,
+            "subscribed": get_callback_count(search) > 0,
             "is_scheduled": search.is_scheduled,
             "disabled": search.disabled,
         })
@@ -30,7 +29,8 @@ class ServiceAlertsHandler(BaseRestHandler):
             }
         )
         search = self.get_search()
-        search.enable()
+        if search.disabled:
+            search.enable()
         self.send_json_response(subscribe_response)
     def handle_DELETE(self):
         payload = json.loads(self.request['payload'])
@@ -40,5 +40,6 @@ class ServiceAlertsHandler(BaseRestHandler):
             payload
         )
         search = self.get_search()
-        search.disable()
+        if get_callback_count(search)==0:
+            search.disable()
         self.send_json_response(unsubscribe_response)

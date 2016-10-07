@@ -1,7 +1,7 @@
 import json
 from .base_handler import BaseRestHandler
 from .utils import workato_app_name
-from .alert_action_utils import has_callback, add_callback, remove_callback, has_workato_alert_action
+from .alert_action_utils import add_callback, remove_callback, has_workato_alert_action
 
 class AlertsHandler(BaseRestHandler):
     def handle_GET(self):
@@ -20,8 +20,6 @@ class AlertsHandler(BaseRestHandler):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
         saved_search = s.saved_searches[payload['search_name']]
-        if has_callback(saved_search):
-            raise Exception('another callback already registered')
         add_callback(saved_search, payload['callback_url'])
         self.send_json_response({
             "search_name": payload['search_name'],

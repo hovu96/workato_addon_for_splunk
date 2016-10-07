@@ -1,6 +1,6 @@
 
 
-callback_search_param = 'action.workato.param.callback_url'
+callback_search_param = 'action.workato.param.callback_urls'
 workato_alert_action = 'action.workato'
 
 def has_workato_alert_action(saved_search):
@@ -9,25 +9,41 @@ def has_workato_alert_action(saved_search):
             return True
     return False
 
-def has_callback(saved_search):
+def iterate_callbacks_from_string(s):
+    for v in s.split('|'):
+        v=v.strip()
+        if v:
+            yield v
+
+def iterate_callbacks(saved_search):
     if callback_search_param in saved_search.content:
-        if saved_search[callback_search_param]:
-            return True
-    return False
+        callbacks = saved_search[callback_search_param]
+        for v in iterate_callbacks_from_string(callbacks):
+            yield v
+
+def get_callback_count(saved_search):
+    cnt = 0
+    for callback in iterate_callbacks(saved_search):
+        cnt += 1
+    return cnt
 
 def add_callback(saved_search, callback_url):
+    callbacks = list(iterate_callbacks(saved_search))
+    if callback_url in callbacks:
+        raise Exception('url already registered')
+    callbacks.append(callback_url)
     kwargs = {
         "actions": "workato",
-        callback_search_param: callback_url,
+        callback_search_param: '|'.join(callbacks),
         }
     saved_search.update(**kwargs)
 
 def remove_callback(saved_search, callback_url):
-    if callback_search_param in saved_search.content:
-        if saved_search[callback_search_param] != callback_url:
-            raise Exception('callback not registered')
-    kwargs = {
-        "actions": "",
-        callback_search_param: "",
-        }
-    saved_search.update(**kwargs)
+    callbacks = list(iterate_callbacks(saved_search))
+    if callback_url in callbacks:
+        callbacks.remove(callback_url)
+        kwargs = {
+            "actions": "workato",
+            callback_search_param: '|'.join(callbacks),
+            }
+        saved_search.update(**kwargs)

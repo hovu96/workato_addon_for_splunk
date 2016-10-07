@@ -1,3 +1,3 @@
 
 
-action.workato.param.callback_url = <string>
+action.workato.param.callback_urls = <string>

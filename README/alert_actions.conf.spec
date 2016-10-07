@@ -1,4 +1,4 @@
 
 
 [workato]
-param.callback_url = <value>
+param.callback_urls = <value>

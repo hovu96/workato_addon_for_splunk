@@ -1,5 +1,5 @@
 import sys, os, urllib2, time, json, ssl, base64, random
-import splunklib.client as client
+from splunklib import client
 
 splunk_host = sys.argv[1]
 splunk_port = sys.argv[2]
@@ -77,8 +77,9 @@ class MyCallbackHandler(BaseHTTPRequestHandler):
         content_len = int(self.headers.getheader('content-length', 0))
         post_body = self.rfile.read(content_len)
         self.send_response(200)
-        #print "Received event on %s"%(self.path)
-        received_events[self.path].append(post_body)
+        if self.path in received_events:
+            alert = json.loads(post_body)
+            received_events[self.path].append(alert)
         self.end_headers()
         self.wfile.write("")
 server_address = ('', 80)
@@ -101,7 +102,8 @@ def subscribe_alert(name):
         "callback_url": "http://%s%s" % (test_host, callback_path)
     }), callback_path
 
-def unsubscribe_alert(name, payload):
+def unsubscribe_alert(name, payload, callback_path):
+    del received_events[callback_path]
     return call_workato_addon("alerts","DELETE",payload)
 
 print "subscribing realtime alert ..."
@@ -115,12 +117,13 @@ while len(received_events[subscription_key])==0:
     handle_server_requests()
 
 print "unsubscribing realtime alert ..."
-unsubscribe_alert('realtime_alert', unsubscribe_data)
+unsubscribe_alert('realtime_alert', unsubscribe_data, subscription_key)
 
 handle_server_requests()
 
 print "checking service alerts status ..."
-service_alerts_search = s.saved_searches['IT Service Alerts']
+service_alert_name = 'IT Service Alerts'
+service_alerts_search = s.saved_searches[service_alert_name]
 if not service_alerts_search.disabled == "1":
     raise Exception("service alerts not disabled")
 servicealerts_info = call_workato_addon("servicealerts","GET",None)
@@ -140,8 +143,9 @@ def subscribe_service_alert():
         "callback_url": "http://%s%s" % (test_host, callback_path)
     }), callback_path
 
-def unsubscribe_service_alert(payload):
-    return call_workato_addon("servicealerts","DELETE",payload)
+def unsubscribe_service_alert(payload, callback_path):
+    del received_events[callback_path]
+    return call_workato_addon("servicealerts", "DELETE", payload)
 
 print "subscribing service alert ..."
 unsubscribe_data, subscription_key = subscribe_service_alert()
@@ -173,31 +177,131 @@ service_alert = received_events[subscription_key][0]
 handle_server_requests()
 
 print "unsubscribing service alert ..."
-unsubscribe_service_alert(unsubscribe_data)
+unsubscribe_service_alert(unsubscribe_data, subscription_key)
 
 handle_server_requests()
 
 print "checking service alerts status ..."
 servicealerts_info = call_workato_addon("servicealerts","GET",None)
 if servicealerts_info['disabled'] == "0":
-    raise Exception("service alerts enabled")
+    raise Exception("service alert enabled")
 if servicealerts_info['subscribed'] is True:
     raise Exception("somebody already subscribed for service alerts")
 
 handle_server_requests()
 
-print "subscribing service alert (#1) ..."
-unsubscribe_data_1, _ = subscribe_service_alert()
+print "checking service alert status ..."
+service_alerts_search = s.saved_searches[service_alert_name]
+if not service_alerts_search.disabled:
+    raise Exception("service alert enabled")
 
-#service_alerts_search = s.saved_searches['IT Service Alerts']
-#if not service_alerts_search.disabled == "0":
-#    raise Exception("service alert search not enabled")
-#
-#if callback_search_param in saved_search.content:
-#    if saved_search[callback_search_param] != callback_url:
-#s.
+handle_server_requests()
+
+callback_search_param = 'action.workato.param.callback_urls'
+
+def iterate_callbacks(saved_search):
+    if callback_search_param in saved_search.content:
+        callbacks = saved_search[callback_search_param]
+        for v in callbacks.split('|'):
+            v=v.strip()
+            if v:
+                yield v
+
+def get_callback_count(saved_search):
+    cnt = 0
+    for callback in iterate_callbacks(saved_search):
+        cnt += 1
+    return cnt
+
+def has_callback_path(saved_search, callback_path):
+    for callback in iterate_callbacks(saved_search):
+        if callback.endswith(callback_path):
+            return True
+    return False
+
+print "subscribing service alert (#1) ..."
+unsubscribe_data_1, subscription_1_callback_path = subscribe_service_alert()
+
+handle_server_requests()
+
+print "checking service alert status ..."
+service_alerts_search = s.saved_searches[service_alert_name]
+if service_alerts_search.disabled == "1":
+    raise Exception("service alert disabled")
+if get_callback_count(service_alerts_search)!=1:
+    raise Exception("unexpected callback count")
+if not has_callback_path(service_alerts_search, subscription_1_callback_path):
+    raise Exception("callback path missing")
+
+handle_server_requests()
+
+print "subscribing service alert (#2) ..."
+unsubscribe_data_2, subscription_2_callback_path = subscribe_service_alert()
+
+handle_server_requests()
+
+print "checking service alert status ..."
+service_alerts_search = s.saved_searches[service_alert_name]
+if service_alerts_search.disabled == "1":
+    raise Exception("service alert disabled")
+if get_callback_count(service_alerts_search)!=2:
+    raise Exception("unexpected callback count")
+if not has_callback_path(service_alerts_search, subscription_1_callback_path):
+    raise Exception("callback path missing")
+if not has_callback_path(service_alerts_search, subscription_2_callback_path):
+    raise Exception("callback path missing")
+
+handle_server_requests()
+
+print "creating service alert ..."
+index = s.indexes['itsi_tracked_alerts']
+with index.attached_socket(sourcetype='test') as sock:
+    sock.send('event_id="2" severity="high" title="ein test" severity_label="unknown" description="description"\\r\\n')
+
+handle_server_requests()
+
+def has_service_alert(callback_path, event_id):
+    for event in received_events[callback_path]:
+        if event['event_id']==event_id:
+            return True
+    return False
+
+print "waiting for service alerts ..."
+while not has_service_alert(subscription_1_callback_path, "2"):
+    server.handle_request()
+while not has_service_alert(subscription_2_callback_path, "2"):
+    server.handle_request()
+
+handle_server_requests()
+
+print "unsubscribing service alert (#2) ..."
+unsubscribe_service_alert(unsubscribe_data_2, subscription_2_callback_path)
+
+handle_server_requests()
+
+print "checking service alert status ..."
+service_alerts_search = s.saved_searches[service_alert_name]
+if get_callback_count(service_alerts_search)!=1:
+    raise Exception("unexpected callback count")
+if service_alerts_search.disabled == "1":
+    raise Exception("service alert enabled")
+if not has_callback_path(service_alerts_search, subscription_1_callback_path):
+    raise Exception("callback path missing")
+
+handle_server_requests()
 
 print "unsubscribing service alert (#1) ..."
-unsubscribe_service_alert(unsubscribe_data_1)
+unsubscribe_service_alert(unsubscribe_data_1, subscription_1_callback_path)
+
+handle_server_requests()
+
+print "checking service alert status ..."
+service_alerts_search = s.saved_searches[service_alert_name]
+if get_callback_count(service_alerts_search)!=0:
+    raise Exception("unexpected callback count")
+if service_alerts_search.disabled == "0":
+    raise Exception("service alert enabled")
+
+handle_server_requests()
 
 print "done"
