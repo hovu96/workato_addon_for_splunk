@@ -10,6 +10,8 @@ def call_workato(payload):
     config = payload.get('configuration')
 
     callback_urls = config.get('callback_urls')
+    if callback_urls is None:
+        callback_urls = ""
     callback_urls = list(iterate_callbacks_from_string(callback_urls))
 
     results_file = payload.get('results_file')
