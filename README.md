@@ -46,11 +46,15 @@ Proceed the following steps:
 5. Select the alert that the Workato recipe will subscribe for.
 6. Add actions to the Workato recipe to process triggered alerts.
 
-### Splunk security alerts
-
-*not yet implemented*
-
 ### Splunk IT service alerts
+
+Proceed the following steps:
+
+1. Install and configure [Splunk IT Service Intelligence](https://splunkbase.splunk.com/app/1841/)
+3. Log in to Workato to create a new recipe. Select the *Splunk* application and *New service alert* as trigger for the recipe.
+6. Add actions to the Workato recipe to process triggered alerts.
+
+### Splunk security alerts
 
 *not yet implemented*
 
