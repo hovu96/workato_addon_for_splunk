@@ -27,7 +27,7 @@ To learn more about Splunk and how to create alerts, refer to [Getting Started w
 
 To learn more about Workato and how to create Workato recipes using Application Connections, Triggers and Actions, refer to [Workato Docs](http://resources.workato.com/how-it-works/) and [Workato Support Portal](https://support.workato.com/support/home).
 
-To use this add-on, create Workato recipes that leverage the *Splunk* application within the Workato platform.
+To use this add-on, create Workato recipes that leverage the *Splunk* application within the Workato platform. As of now, the *Splunk* application is not publicly available - but you can create your own [Custom Connector](https://www.workato.com/custom_adapters). Just copy and paste from the [Connector SDK](https://github.com/workato/connector_sdk/blob/master/basic_auth/splunk_connector.rb).
 
 ## Sending alerts from Splunk to Workato
 
