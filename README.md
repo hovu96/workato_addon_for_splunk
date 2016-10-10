@@ -41,10 +41,11 @@ Proceed the following steps:
 
 1. Log in to Splunk to identify an existing Splunk alerts or create a new Splunk alert as described in the [Docs](http://docs.splunk.com/Documentation/Splunk/latest/Alert/AlertWorkflowOverview).
 2. Select *Workato* as action for the alert.
-3. Log in to Workato to create a new recipe. Select the *Splunk* application and *New generic alert* as trigger for the recipe.
-4. Enter the field names that you expect to be within each Splunk alert. That allows you to pass the data from alert to actions within the Workato recipe.
-5. Select the alert that the Workato recipe will subscribe for.
-6. Add actions to the Workato recipe to process triggered alerts.
+3. Set alert permissions to "Shared Globally".
+4. Log in to Workato to create a new recipe. Select the *Splunk* application and *New generic alert* as trigger for the recipe.
+5. Enter the field names that you expect to be within each Splunk alert. That allows you to pass the data from alert to actions within the Workato recipe.
+6. Select the alert that the Workato recipe will subscribe for.
+7. Add actions to the Workato recipe to process triggered alerts.
 
 ### Splunk IT service alerts
 
