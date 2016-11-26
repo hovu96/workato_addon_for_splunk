@@ -17,15 +17,13 @@ As this add-on provides Splunk REST API endpoints for Workato, the Splunk Search
 
 To allow Splunk to send alerts to Workato (to trigger the execution of Workato recipes), the Splunk Search Head must be allowed to send HTTPS requests on port 443 to www.workato.com.
 
-To allow Workato to send events to Splunk (sent by Workato actions as part of the execution of recipes), the Splunk Indexer's [HTTP Event Collector (HEC)](http://dev.splunk.com/view/event-collector/SP-CAAAE6M) feature must be enabled and the HEC port (by default, 8088) must be available for incoming HTTPS requests.
-
 # Usage
 
 To learn more about Splunk and how to create alerts, refer to [Getting Started with Splunk](https://www.splunk.com/en_us/resources/getting-started.html) and the [Splunk Docs](http://docs.splunk.com/Documentation/Splunk/latest).
 
 To learn more about Workato and how to create Workato recipes using Application Connections, Triggers and Actions, refer to [Workato Docs](http://resources.workato.com/how-it-works/) and [Workato Support Portal](https://support.workato.com/support/home).
 
-To use this add-on, create Workato recipes that leverage the *Splunk* application within the Workato platform. As of now, the *Splunk* application is not publicly available - but you can create your own [Custom Connector](https://www.workato.com/custom_adapters). Just copy and paste from the [Connector SDK](https://github.com/workato/connector_sdk/blob/master/basic_auth/splunk_connector.rb).
+To use this add-on, create Workato recipes that leverage the [Splunk](https://www.workato.com/integrations/splunk) application within the Workato platform.
 
 ## Sending alerts from Splunk to Workato
 
@@ -59,7 +57,15 @@ Proceed the following steps:
 
 ## Sending events from Workato to Splunk
 
-*not yet implemented*
+Workato provides and recipe action to send events to Splunk.
+
+Proceed the following steps:
+
+1. Log in to Workato to create a new recipe.
+2. Select whatever application as an trigger for the recipe.
+3. Select the *Splunk* application and then select the *Send event to Splunk* action
+4. Specify the event data in the *Payload* field
+5. Optionally, specify the fields *Index*, *Source*, *Sourcetype* and *Host*   
 
 ## Running Splunk searches from Workato
 
