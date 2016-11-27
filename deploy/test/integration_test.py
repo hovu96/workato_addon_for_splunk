@@ -1,5 +1,5 @@
 import sys, os, urllib2, time, json, ssl, base64, random
-from splunklib import client
+from splunklib import client, results as results_lib
 
 splunk_host = sys.argv[1]
 splunk_port = sys.argv[2]
@@ -65,6 +65,39 @@ print "getting scheduled searches ..."
 searches = call_workato_addon("alerts","GET",None)
 if "realtime_alert" not in searches:
     raise Exception("missing search 'realtime_alert'")
+
+def send_event_to_splunk(params):
+    call_workato_addon("events","POST",params)
+    time.sleep(2)
+
+def run_splunk_search(query):
+    job = s.search(query)
+    while not job.is_done():
+        time.sleep(.2)
+    result_stream = job.results()
+    results_reader = results_lib.ResultsReader(result_stream)
+    events = []
+    for result in results_reader:
+        if isinstance(result, dict):
+            events.append(result)
+    return events
+
+send_event_to_splunk({
+    "payload": "test=1",
+    })
+results = run_splunk_search("search index=main earliest=-1m test=1")
+if len(results)!=1:
+    raise Exception("unexpected search result")
+send_event_to_splunk({
+    "payload": "test=2",
+    "index": "test",
+    "source": "test",
+    "sourcetype": "test",
+    "host": "test"
+    })
+results = run_splunk_search("search index=test earliest=-1m test=2 source=test sourcetype=test host=test")
+if len(results)!=1:
+    raise Exception("unexpected search result")
 
 print "starting server  ..."
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler

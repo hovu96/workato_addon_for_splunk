@@ -246,7 +246,10 @@ class ResultsReader(object):
                         elem.clear()
     
                 elif elem.tag in ('text', 'v') and event == 'end':
-                    values.append(elem.text.encode('utf8'))
+                    if elem.text:
+                        values.append(elem.text.encode('utf8'))
+                    else:
+                        values.append("")
                     elem.clear()
     
                 elif elem.tag == 'msg':
