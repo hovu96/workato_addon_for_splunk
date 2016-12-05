@@ -6,7 +6,7 @@ Welcome to the Workato Add-on for Splunk. This add-on enables [Splunk](https://w
 
 Features:
 - Sending alerts from Splunk to Workato
-- Sending events from Workato to Splunk **(not yet implemented)**
+- Sending events from Workato to Splunk
 - Running Splunk searches from Workato **(not yet implemented)**
 
 # Installation
