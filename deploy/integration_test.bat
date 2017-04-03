@@ -6,6 +6,8 @@ IF %DEPOY_PATH:~-1%==/ SET DEPOY_PATH=%DEPOY_PATH:~0,-1%
 
 @FOR /f "tokens=*" %%i IN ('docker-machine.exe env --shell cmd default') DO %%i
 
+rmdir %~dp0\test_app\local /s /q
+rmdir %~dp0\..\local /s /q
 
 docker rm -fv workato_splunk
 docker rm -fv workato_test
@@ -19,12 +21,3 @@ docker run --name workato_test -it --rm -v %DEPOY_PATH%/test:/usr/src/myapp:ro -
 
 set /p DUMMY=Hit ENTER to continue...
 docker rm -fv workato_splunk
-
-rem @for /f %%i in ('docker-machine.exe inspect --format="{{.HostOptions.AuthOptions.StorePath}}" default') do set DOCKER_MACHINE_STORE_PATH=%%i
-rem set DOCKER_MACHINE_STORE_PATH=%DOCKER_MACHINE_STORE_PATH:\=/%
-rem set DOCKER_MACHINE_STORE_PATH=%DOCKER_MACHINE_STORE_PATH:c:=/c%
-
-rem docker rm -fv workato_test_env
-rem docker build -t workato_test_env -f=test_Dockerfile ..
-
-rem docker run --rm -v="%DOCKER_MACHINE_STORE_PATH%:/dockermachine:ro" --env DOCKER_HOST="%DOCKER_HOST%" --env DOCKER_TLS_VERIFY="%DOCKER_TLS_VERIFY%" --env DOCKER_CERT_PATH="/dockermachine" --env ADDON_PATH="%PWD%" -it --name workato_test_env workato_test_env 

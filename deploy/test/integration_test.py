@@ -337,4 +337,26 @@ if service_alerts_search.disabled == "0":
 
 handle_server_requests()
 
+def list_saved_search():
+    return call_workato_addon("savedsearches","GET",None)
+
+def run_saved_search(name):
+    return call_workato_addon("savedsearches","POST",{
+        "search_name": name
+    })
+
+print "getting saved searches ..."
+saved_searches = list_saved_search()
+if "latest_internal_event" not in saved_searches:
+    raise Exception("missing search 'latest_internal_event'")
+
+handle_server_requests()
+
+print "running saved search ..."
+results = run_saved_search("latest_internal_event")["results"]
+if len(results)!=1:
+    raise Exception("unexpected results: %s",results)
+
+handle_server_requests()
+
 print "done"
