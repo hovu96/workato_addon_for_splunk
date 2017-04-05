@@ -1,25 +1,29 @@
 #!/bin/sh
 
-# Cd to deploy directory
-cd "$(dirname "$0")"
-
 # Remove old package
 rm -f workato_addon_for_splunk.spl
 
 # Increase build number
-let BUILD=`cat .build`
-let BUILD=BUILD+1
-echo $BUILD > .build
+BUILD_NUMBER=$(cat .build)
+BUILD_NUMBER=$((BUILD_NUMBER + 1))
+echo $BUILD_NUMBER > .build
 
 # Ask for new version number
-VERSION=`cat .version`
+VERSION=$(cat .version)
 read -p "Version ($VERSION): " NEW_VERSION
-[[ ! -z "$NEW_VERSION" ]] && VERSION="$NEW_VERSION"
-echo $VERSION > .version
+echo $NEW_VERSION
+
+if [ -z "$NEW_VERSION" ]
+then
+    echo "Version number not changed"
+else
+    VERSION="$NEW_VERSION"
+    echo $VERSION > .version
+fi
 
 # Update app config
-perl -i -pe "s/^build\s*=.*/build = $BUILD/g" ../default/app.conf
-perl -i -pe "s/^version\s*=.*/version = $VERSION/g" ../default/app.conf
+sed -i -- "s/^build\s*=.*/build = $BUILD_NUMBER/g" ../default/app.conf
+sed -i -- "s/^version\s*=.*/version = $VERSION/g" ../default/app.conf
 
 cd ../..
 export COPYFILE_DISABLE=true
