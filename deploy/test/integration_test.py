@@ -347,13 +347,14 @@ def run_saved_search(name):
 
 print "getting saved searches ..."
 saved_searches = list_saved_search()
-if "latest_internal_event" not in saved_searches:
-    raise Exception("missing search 'latest_internal_event'")
+test_saved_search_name = "latest internal event"
+if test_saved_search_name not in saved_searches:
+    raise Exception("missing search '%'"%test_saved_search_name)
 
 handle_server_requests()
 
 print "running saved search ..."
-results = run_saved_search("latest_internal_event")["results"]
+results = run_saved_search(test_saved_search_name)["results"]
 if len(results)!=1:
     raise Exception("unexpected results: %s",results)
 

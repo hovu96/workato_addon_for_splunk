@@ -39,7 +39,7 @@ class SavedSearchesHandler(BaseRestHandler):
                     events.append(result)
             return events
 
-        results = run_splunk_search("savedsearch %s" % saved_search.name)
+        results = run_splunk_search("savedsearch \"%s\"" % saved_search.name)
 
         self.send_json_response({
             "results": results,
