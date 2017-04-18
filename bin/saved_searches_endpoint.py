@@ -25,22 +25,31 @@ class SavedSearchesHandler(BaseRestHandler):
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
         s = self.create_service()
+
+        # extract request parameters
         saved_search = s.saved_searches[payload['search_name']]
 
-        def run_splunk_search(query):
-            job = s.search(query)
-            while not job.is_done():
-                time.sleep(.2)
-            result_stream = job.results()
-            results_reader = results_lib.ResultsReader(result_stream)
-            events = []
-            for result in results_reader:
-                if isinstance(result, dict):
-                    events.append(result)
-            return events
+        # build search query
+        search_query = "savedsearch \"%s\"" % saved_search.name
 
-        results = run_splunk_search("savedsearch \"%s\"" % saved_search.name)
+        # run the search
+        result_stream = s.jobs.oneshot(search_query)
+        results_reader = results_lib.ResultsReader(result_stream)
 
+        # stream search results
+        events = []
+        messages = []
+        for result in results_reader:
+            if isinstance(result, results_lib.Message):
+                messages.append({
+                    "type": result.type,
+                    "message": result.message,
+                })
+            elif isinstance(result, dict):
+                events.append(result)
+
+        # send response
         self.send_json_response({
-            "results": results,
+            "results": events,
+            "messages": messages,
         })
