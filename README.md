@@ -7,7 +7,7 @@ Welcome to the Workato Add-on for Splunk. This add-on enables [Splunk](https://w
 Features:
 - Sending alerts from Splunk to Workato
 - Sending events from Workato to Splunk
-- Running Splunk searches from Workato **(not yet implemented)**
+- Running Splunk searches from Workato
 
 # Installation
 
@@ -57,7 +57,7 @@ Proceed the following steps:
 
 ## Sending events from Workato to Splunk
 
-Workato provides and recipe action to send events to Splunk.
+Workato provides a recipe action to send events to Splunk.
 
 Proceed the following steps:
 
@@ -69,4 +69,10 @@ Proceed the following steps:
 
 ## Running Splunk searches from Workato
 
-*not yet implemented*
+Workato provides receipe actions to run searches within Splunk. You can either select from one of the Saves Searches (predefined searches within Splunk) or specify an custom/ad-hoc search to run.
+
+Proceed the following steps:
+
+1. Log in to Workato to create a new recipe.
+2. Select whatever application as an trigger for the recipe.
+3. Select the *Splunk* application and then select the one of the actions to run searches within Splunk
