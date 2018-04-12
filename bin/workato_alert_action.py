@@ -40,10 +40,13 @@ def call_workato(payload):
             for callback_url in callback_urls:
                 callback_invocation_attempts += 1
                 try:
-                    req = urllib2.Request(callback_url, json.dumps(payload), {"Content-Type": "application/json"})
-                    res = urllib2.urlopen(req)
-                    body_bytes = len(str(res.read()))
-                    log_info("callback=\"%s\" status=%d body_length=\"%d\"" % (callback_url, res.code, body_bytes))
+                	if not callback_url.startswith("https://") and not os.getenv("WORKATO_INTEGRATION_TEST")=="1":
+                		log_error("insecure callback url: \"%s\"" % callback_url)
+                	else:
+	                    req = urllib2.Request(callback_url, json.dumps(payload), {"Content-Type": "application/json"})
+	                    res = urllib2.urlopen(req)
+	                    body_bytes = len(str(res.read()))
+	                    log_info("callback=\"%s\" status=%d body_length=\"%d\"" % (callback_url, res.code, body_bytes))
                 except urllib2.HTTPError, e:
                     callback_invocation_errors += 1
                     log_error("callback=\"%s\" error=\"%s\"" % (callback_url, str(e)))

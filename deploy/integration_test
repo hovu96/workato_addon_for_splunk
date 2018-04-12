@@ -25,7 +25,7 @@ NETWORK_NAME="workato-integration-test"
 docker network create $NETWORK_NAME > /dev/null 2>&1
 docker rm -fv workato_splunk > /dev/null 2>&1
 
-CONTAINER_ID=$(docker run -d -p 8081:8000 -p 8082:8089 --name workato_splunk --network $NETWORK_NAME -e "SPLUNK_START_ARGS=--accept-license" -e "SPLUNK_CMD=edit user admin -password admin -auth admin:changeme" -v $ADDON_PATH:/opt/splunk/etc/apps/workato_addon_for_splunk:rw -v $ADDON_PATH/deploy/test_app:/opt/splunk/etc/apps/test_app:rw splunk/splunk:latest)
+CONTAINER_ID=$(docker run -d -p 8081:8000 -p 8082:8089 --name workato_splunk --network $NETWORK_NAME -e "SPLUNK_START_ARGS=--accept-license" -e "SPLUNK_CMD=edit user admin -password admin -auth admin:changeme" -e "WORKATO_INTEGRATION_TEST=1" -v $ADDON_PATH:/opt/splunk/etc/apps/workato_addon_for_splunk:rw -v $ADDON_PATH/deploy/test_app:/opt/splunk/etc/apps/test_app:rw splunk/splunk:latest)
 
 docker rm -fv workato_test > /dev/null 2>&1
 docker run --name workato_test --network $NETWORK_NAME -it --rm -v $ADDON_PATH/deploy/test:/usr/src/myapp:ro -w /usr/src/myapp python:2.7 python2.7 integration_test.py workato_splunk 8089 workato_test
