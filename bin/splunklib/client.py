@@ -1,4 +1,4 @@
-# Copyright 2011-2012 Splunk, Inc.
+# Copyright 2011-2015 Splunk, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"): you may
 # not use this file except in compliance with the License. You may obtain
@@ -60,23 +60,25 @@ attributes, and methods that are specific to each kind of entity. For example::
 
 import datetime
 import json
-import urllib
+from splunklib.six.moves import urllib
 import logging
 from time import sleep
 from datetime import datetime, timedelta
 import socket
 import contextlib
 
-from binding import Context, HTTPError, AuthenticationError, namespace, UrlEncoded, _encode
-from data import record
-import data
+from splunklib import six
+from .binding import Context, HTTPError, AuthenticationError, namespace, UrlEncoded, _encode, _make_cookie_header, _NoAuthenticationToken
+from .data import record
+from . import data
 
 __all__ = [
     "connect",
     "NotSupportedError",
     "OperationError",
     "IncomparableException",
-    "Service"
+    "Service",
+    "namespace"
 ]
 
 PATH_APPS = "apps/local/"
@@ -92,15 +94,16 @@ PATH_FIRED_ALERTS = "alerts/fired_alerts/"
 PATH_INDEXES = "data/indexes/"
 PATH_INPUTS = "data/inputs/"
 PATH_JOBS = "search/jobs/"
-PATH_LOGGER = "server/logger/"
+PATH_LOGGER = "/services/server/logger/"
 PATH_MESSAGES = "messages/"
 PATH_MODULAR_INPUTS = "data/modular-inputs"
 PATH_ROLES = "authorization/roles/"
 PATH_SAVED_SEARCHES = "saved/searches/"
 PATH_STANZA = "configs/conf-%s/%s" # (file, stanza)
 PATH_USERS = "authentication/users/"
-PATH_RECEIVERS_STREAM = "receivers/stream"
-PATH_RECEIVERS_SIMPLE = "receivers/simple"
+PATH_RECEIVERS_STREAM = "/services/receivers/stream"
+PATH_RECEIVERS_SIMPLE = "/services/receivers/simple"
+PATH_STORAGE_PASSWORDS = "storage/passwords"
 
 XNAMEF_ATOM = "{http://www.w3.org/2005/Atom}%s"
 XNAME_ENTRY = XNAMEF_ATOM % "entry"
@@ -108,36 +111,44 @@ XNAME_CONTENT = XNAMEF_ATOM % "content"
 
 MATCH_ENTRY_CONTENT = "%s/%s/*" % (XNAME_ENTRY, XNAME_CONTENT)
 
+
 class IllegalOperationException(Exception):
     """Thrown when an operation is not possible on the Splunk instance that a
     :class:`Service` object is connected to."""
     pass
+
 
 class IncomparableException(Exception):
     """Thrown when trying to compare objects (using ``==``, ``<``, ``>``, and
     so on) of a type that doesn't support it."""
     pass
 
+
 class AmbiguousReferenceException(ValueError):
     """Thrown when the name used to fetch an entity matches more than one entity."""
     pass
+
 
 class InvalidNameException(Exception):
     """Thrown when the specified name contains characters that are not allowed
     in Splunk entity names."""
     pass
 
+
 class NoSuchCapability(Exception):
     """Thrown when the capability that has been referred to doesn't exist."""
     pass
+
 
 class OperationError(Exception):
     """Raised for a failed operation, such as a time out."""
     pass
 
+
 class NotSupportedError(Exception):
     """Raised for operations that are not supported on a given object."""
     pass
+
 
 def _trailing(template, *targets):
     """Substring of *template* following all *targets*.
@@ -167,11 +178,12 @@ def _trailing(template, *targets):
         s = s[n + len(t):]
     return s
 
+
 # Filter the given state content record according to the given arg list.
 def _filter_content(content, *args):
     if len(args) > 0:
         return record((k, content[k]) for k in args)
-    return record((k, v) for k, v in content.iteritems()
+    return record((k, v) for k, v in six.iteritems(content)
         if k not in ['eai:acl', 'eai:attributes', 'type'])
 
 # Construct a resource path from the given base path + resource name
@@ -179,16 +191,18 @@ def _path(base, name):
     if not base.endswith('/'): base = base + '/'
     return base + name
 
+
 # Load an atom record from the body of the given response
 def _load_atom(response, match=None):
-    return data.load(response.body.read(), match)
+    return data.load(response.body.read().decode('utf-8'), match)
+
 
 # Load an array of atom entries from the body of the given response
 def _load_atom_entries(response):
     r = _load_atom(response)
     if 'feed' in r:
         # Need this to handle a random case in the REST API
-        if r.feed.get('totalResults') == 0:
+        if r.feed.get('totalResults') in [0, '0']:
             return []
         entries = r.feed.get('entry', None)
         if entries is None: return None
@@ -202,9 +216,11 @@ def _load_atom_entries(response):
         if entries is None: return None
         return entries if isinstance(entries, list) else [entries]
 
+
 # Load the sid from the body of the given response
 def _load_sid(response):
     return _load_atom(response).response.sid
+
 
 # Parse the given atom entry record into a generic entity state record
 def _parse_atom_entry(entry):
@@ -221,16 +237,30 @@ def _parse_atom_entry(entry):
     metadata = _parse_atom_metadata(content)
 
     # Filter some of the noise out of the content record
-    content = record((k, v) for k, v in content.iteritems()
-        if k not in ['eai:acl', 'eai:attributes', 'type'])
+    content = record((k, v) for k, v in six.iteritems(content)
+                     if k not in ['eai:acl', 'eai:attributes'])
+
+    if 'type' in content:
+        if isinstance(content['type'], list):
+            content['type'] = [t for t in content['type'] if t != 'text/xml']
+            # Unset type if it was only 'text/xml'
+            if len(content['type']) == 0:
+                content.pop('type', None)
+            # Flatten 1 element list
+            if len(content['type']) == 1:
+                content['type'] = content['type'][0]
+        else:
+            content.pop('type', None)
 
     return record({
         'title': title,
         'links': links,
         'access': metadata.access,
         'fields': metadata.fields,
-        'content': content
+        'content': content,
+        'updated': entry.get("updated")
     })
+
 
 # Parse the metadata fields out of the given atom entry content record
 def _parse_atom_metadata(content):
@@ -259,6 +289,9 @@ def connect(**kwargs):
     :type port: ``integer``
     :param scheme: The scheme for accessing the service (the default is "https").
     :type scheme: "https" or "http"
+    :param verify: Enable (True) or disable (False) SSL verrification for
+                   https connections. (optional, the default is True)
+    :type verify: ``Boolean``
     :param `owner`: The owner context of the namespace (optional).
     :type owner: ``string``
     :param `app`: The app context of the namespace (optional).
@@ -268,6 +301,9 @@ def connect(**kwargs):
     :param `token`: The current session token (optional). Session tokens can be
                     shared across multiple service instances.
     :type token: ``string``
+    :param cookie: A session cookie. When provided, you don't need to call :meth:`login`.
+        This parameter is only supported for Splunk 6.2+.
+    :type cookie: ``string``
     :param autologin: When ``True``, automatically tries to log in again if the
         session terminates.
     :type autologin: ``boolean``
@@ -285,7 +321,10 @@ def connect(**kwargs):
         a = s.apps["my_app"]
         ...
     """
-    return Service(**kwargs).login()
+    s = Service(**kwargs)
+    s.login()
+    return s
+
 
 # In preparation for adding Storm support, we added an
 # intermediary class between Service and Context. Storm's
@@ -296,10 +335,11 @@ def connect(**kwargs):
 class _BaseService(Context):
     pass
 
+
 class Service(_BaseService):
     """A Pythonic binding to Splunk instances.
 
-    A :class:`Service` represents a binding to a Splunk instane on an
+    A :class:`Service` represents a binding to a Splunk instance on an
     HTTP or HTTPS port. It handles the details of authentication, wire
     formats, and wraps the REST API endpoints into something more
     Pythonic. All of the low-level operations on the instance from
@@ -319,6 +359,9 @@ class Service(_BaseService):
     :type port: ``integer``
     :param scheme: The scheme for accessing the service (the default is "https").
     :type scheme: "https" or "http"
+    :param verify: Enable (True) or disable (False) SSL verrification for
+                   https connections. (optional, the default is True)
+    :type verify: ``Boolean``
     :param `owner`: The owner context of the namespace (optional; use "-" for wildcard).
     :type owner: ``string``
     :param `app`: The app context of the namespace (optional; use "-" for wildcard).
@@ -326,6 +369,9 @@ class Service(_BaseService):
     :param `token`: The current session token (optional). Session tokens can be
                     shared across multiple service instances.
     :type token: ``string``
+    :param cookie: A session cookie. When provided, you don't need to call :meth:`login`.
+        This parameter is only supported for Splunk 6.2+.
+    :type cookie: ``string``
     :param `username`: The Splunk account username, which is used to
                        authenticate the Splunk instance.
     :type username: ``string``
@@ -343,6 +389,8 @@ class Service(_BaseService):
         s = client.connect(username="boris", password="natasha")
         # Or if you already have a session token
         s = client.Service(token="atg232342aa34324a")
+        # Or if you already have a valid cookie
+        s = client.Service(cookie="splunkd_8089=...")
     """
     def __init__(self, **kwargs):
         super(Service, self).__init__(**kwargs)
@@ -406,7 +454,7 @@ class Service(_BaseService):
         :return: The system information, as key-value pairs.
         :rtype: ``dict``
         """
-        response = self.get("server/info")
+        response = self.get("/services/server/info")
         return _filter_content(_load_atom(response, MATCH_ENTRY_CONTENT))
 
     @property
@@ -416,6 +464,13 @@ class Service(_BaseService):
         :return: An :class:`Inputs` collection of :class:`Input` entities.
         """
         return Inputs(self)
+
+    def job(self, sid):
+        """Retrieves a search job by sid.
+
+        :return: A :class:`Job` object.
+        """
+        return Job(self, sid).refresh()
 
     @property
     def jobs(self):
@@ -451,6 +506,14 @@ class Service(_BaseService):
             return ReadOnlyCollection(self, PATH_MODULAR_INPUTS, item=ModularInputKind)
         else:
             raise IllegalOperationException("Modular inputs are not supported before Splunk version 5.")
+
+    @property
+    def storage_passwords(self):
+        """Returns the collection of the storage passwords on this Splunk instance.
+
+        :return: A :class:`ReadOnlyCollection` of :class:`StoragePasswords` entities.
+        """
+        return StoragePasswords(self)
 
     # kwargs: enable_lookups, reload_macros, parse_only, output_mode
     def parse(self, query, **kwargs):
@@ -490,41 +553,41 @@ class Service(_BaseService):
         :param timeout: A timeout period, in seconds.
         :type timeout: ``integer``
         """
-        result = self.get("server/control/restart")
-        if timeout is None: return result
-        start = datetime.now()
-        diff = timedelta(seconds=10)
-        while datetime.now() - start < diff:
-            try:
-                self.login() # Has the server gone down yet?
-                sleep(0.3)
-            except Exception:
-                break # Server is down. Move on.
+        msg = { "value": "Restart requested by " + self.username + "via the Splunk SDK for Python"}
+        # This message will be deleted once the server actually restarts.
+        self.messages.create(name="restart_required", **msg)
+        result = self.post("/services/server/control/restart")
+        if timeout is None: 
+            return result
         start = datetime.now()
         diff = timedelta(seconds=timeout)
         while datetime.now() - start < diff:
             try:
-                self.login() # Awake yet?
-                return result
-            except Exception, e:
-                sleep(2)
-        raise Exception, "Operation timed out."
+                self.login()
+                if not self.restart_required:
+                    return result
+            except Exception as e:
+                sleep(1)
+        raise Exception("Operation time out.")
 
     @property
     def restart_required(self):
         """Indicates whether splunkd is in a state that requires a restart.
 
         :return: A ``boolean`` that indicates whether a restart is required.
+
         """
         response = self.get("messages").body.read()
         messages = data.load(response)['feed']
         if 'entry' not in messages:
-            titles = []
-        elif isinstance(messages['entry'], dict):
-            titles = [messages['entry']['title']]
+            result = False
         else:
-            titles = [x['title'] for x in messages['entry']]
-        return 'restart_required' in titles
+            if isinstance(messages['entry'], dict):
+                titles = [messages['entry']['title']]
+            else:
+                titles = [x['title'] for x in messages['entry']]
+            result = 'restart_required' in titles
+        return result
 
     @property
     def roles(self):
@@ -598,12 +661,21 @@ class Service(_BaseService):
         return self._splunk_version
 
     @property
+    def kvstore(self):
+        """Returns the collection of KV Store collections.
+
+        :return: A :class:`KVStoreCollections` collection of :class:`KVStoreCollection` entities.
+        """
+        return KVStoreCollections(self)
+
+    @property
     def users(self):
         """Returns the collection of users.
 
         :return: A :class:`Users` collection of :class:`User` entities.
         """
         return Users(self)
+
 
 class Endpoint(object):
     """This class represents individual Splunk resources in the Splunk REST API.
@@ -732,11 +804,9 @@ class Endpoint(object):
         if path_segment.startswith('/'):
             path = path_segment
         else:
-            path = self.service._abspath(self.path + path_segment, owner=owner,
-                                         app=app, sharing=sharing)
-        return self.service.post(path,
-                                 owner=owner, app=app, sharing=sharing,
-                                 **query)
+            path = self.service._abspath(self.path + path_segment, owner=owner, app=app, sharing=sharing)
+        return self.service.post(path, owner=owner, app=app, sharing=sharing, **query)
+
 
 # kwargs: path, app, owner, sharing, state
 class Entity(Endpoint):
@@ -814,13 +884,14 @@ class Entity(Endpoint):
         Endpoint.__init__(self, service, path)
         self._state = None
         if not kwargs.get('skip_refresh', False):
-            self.refresh(kwargs.get('state', None)) # "Prefresh"
+            self.refresh(kwargs.get('state', None))  # "Prefresh"
+        return
 
     def __contains__(self, item):
         try:
             self[item]
             return True
-        except KeyError:
+        except (KeyError, AttributeError):
             return False
 
     def __eq__(self, other):
@@ -952,7 +1023,7 @@ class Entity(Endpoint):
         if state is not None:
             self._state = state
         else:
-            self._state = self.read()
+            self._state = self.read(self.get())
         return self
 
     @property
@@ -975,6 +1046,8 @@ class Entity(Endpoint):
     def disable(self):
         """Disables the entity at this endpoint."""
         self.post("disable")
+        if self.service.restart_required:
+            self.service.restart(120)
         return self
 
     def enable(self):
@@ -1008,15 +1081,14 @@ class Entity(Endpoint):
         """
         return self.state.title
 
-    def read(self):
-        """Reads the current state of the entity from the server."""
-        response = self.get()
+    def read(self, response):
+        """ Reads the current state of the entity from the server. """
         results = self._load_state(response)
         # In lower layers of the SDK, we end up trying to URL encode
         # text to be dispatched via HTTP. However, these links are already
         # URL encoded when they arrive, and we need to mark them as such.
         unquoted_links = dict([(k, UrlEncoded(v, skip_encode=True))
-                               for k,v in results['links'].iteritems()])
+                               for k,v in six.iteritems(results['links'])])
         results['links'] = unquoted_links
         return results
 
@@ -1068,6 +1140,7 @@ class Entity(Endpoint):
             raise IllegalOperationException('Cannot update the name of an Entity via the REST API.')
         self.post(**kwargs)
         return self
+
 
 class ReadOnlyCollection(Endpoint):
     """This class represents a read-only collection of entities in the Splunk
@@ -1147,10 +1220,11 @@ class ReadOnlyCollection(Endpoint):
                 # x[a,b] is translated to x.__getitem__( (a,b) ), so we
                 # have to extract values out.
                 key, ns = key
+                key = UrlEncoded(key, encode_slash=True)
                 response = self.get(key, owner=ns.owner, app=ns.app)
             else:
+                key = UrlEncoded(key, encode_slash=True)
                 response = self.get(key)
-
             entries = self._load_list(response)
             if len(entries) > 1:
                 raise AmbiguousReferenceException("Found multiple entities named '%s'; please specify a namespace." % key)
@@ -1184,6 +1258,7 @@ class ReadOnlyCollection(Endpoint):
             for entity in saved_searches:
                 print "Saved search named %s" % entity.name
         """
+
         for item in self.iter(**kwargs):
             yield item
 
@@ -1222,7 +1297,7 @@ class ReadOnlyCollection(Endpoint):
         # This has been factored out so that it can be easily
         # overloaded by Configurations, which has to switch its
         # entities' endpoints from its own properties/ to configs/.
-        raw_path = urllib.unquote(state.links.alternate)
+        raw_path = urllib.parse.unquote(state.links.alternate)
         if 'servicesNS/' in raw_path:
             return _trailing(raw_path, 'servicesNS/', '/', '/')
         elif 'services/' in raw_path:
@@ -1264,6 +1339,7 @@ class ReadOnlyCollection(Endpoint):
                 self._entity_path(state),
                 state=state)
             entities.append(entity)
+
         return entities
 
     def itemmeta(self):
@@ -1389,6 +1465,9 @@ class ReadOnlyCollection(Endpoint):
         # return self._load_list(response)
         return list(self.iter(count=count, **kwargs))
 
+
+
+
 class Collection(ReadOnlyCollection):
     """A collection of entities.
 
@@ -1434,6 +1513,7 @@ class Collection(ReadOnlyCollection):
     :class:`Collection` does no caching. Each call makes at least one
     round trip to the server to fetch data.
     """
+
     def create(self, name, **params):
         """Creates a new entity in this collection.
 
@@ -1461,8 +1541,8 @@ class Collection(ReadOnlyCollection):
             applications = s.apps
             new_app = applications.create("my_fake_app")
         """
-        if not isinstance(name, basestring):
-           raise InvalidNameException("%s is not a valid name for an entity." % name)
+        if not isinstance(name, six.string_types):
+            raise InvalidNameException("%s is not a valid name for an entity." % name)
         if 'namespace' in params:
             namespace = params.pop('namespace')
             params['owner'] = namespace.owner
@@ -1508,6 +1588,7 @@ class Collection(ReadOnlyCollection):
             saved_searches.delete('my_saved_search')
             assert 'my_saved_search' not in saved_searches
         """
+        name = UrlEncoded(name, encode_slash=True)
         if 'namespace' in params:
             namespace = params.pop('namespace')
             params['owner'] = namespace.owner
@@ -1525,6 +1606,57 @@ class Collection(ReadOnlyCollection):
                 raise
         return self
 
+    def get(self, name="", owner=None, app=None, sharing=None, **query):
+        """Performs a GET request to the server on the collection.
+
+        If *owner*, *app*, and *sharing* are omitted, this method takes a
+        default namespace from the :class:`Service` object for this :class:`Endpoint`.
+        All other keyword arguments are included in the URL as query parameters.
+
+        :raises AuthenticationError: Raised when the ``Service`` is not logged in.
+        :raises HTTPError: Raised when an error in the request occurs.
+        :param path_segment: A path segment relative to this endpoint.
+        :type path_segment: ``string``
+        :param owner: The owner context of the namespace (optional).
+        :type owner: ``string``
+        :param app: The app context of the namespace (optional).
+        :type app: ``string``
+        :param sharing: The sharing mode for the namespace (optional).
+        :type sharing: "global", "system", "app", or "user"
+        :param query: All other keyword arguments, which are used as query
+            parameters.
+        :type query: ``string``
+        :return: The response from the server.
+        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``,
+                and ``status``
+
+        Example:
+        
+        import splunklib.client
+            s = client.service(...)
+            saved_searches = s.saved_searches
+            saved_searches.get("my/saved/search") == \\
+                {'body': ...a response reader object...,
+                 'headers': [('content-length', '26208'),
+                             ('expires', 'Fri, 30 Oct 1998 00:00:00 GMT'),
+                             ('server', 'Splunkd'),
+                             ('connection', 'close'),
+                             ('cache-control', 'no-store, max-age=0, must-revalidate, no-cache'),
+                             ('date', 'Fri, 11 May 2012 16:30:35 GMT'),
+                             ('content-type', 'text/xml; charset=utf-8')],
+                 'reason': 'OK',
+                 'status': 200}
+            saved_searches.get('nonexistant/search') # raises HTTPError
+            s.logout()
+            saved_searches.get() # raises AuthenticationError
+
+        """
+        name = UrlEncoded(name, encode_slash=True)
+        return super(Collection, self).get(name, owner, app, sharing, **query)
+
+
+
+
 class ConfigurationFile(Collection):
     """This class contains all of the stanzas from one configuration file.
     """
@@ -1534,6 +1666,7 @@ class ConfigurationFile(Collection):
     def __init__(self, service, path, **kwargs):
         Collection.__init__(self, service, path, item=Stanza)
         self.name = kwargs['state']['title']
+
 
 class Configurations(Collection):
     """This class provides access to the configuration files from this Splunk
@@ -1591,7 +1724,7 @@ class Configurations(Collection):
         # This has to be overridden to handle the plumbing of creating
         # a ConfigurationFile (which is a Collection) instead of some
         # Entity.
-        if not isinstance(name, basestring):
+        if not isinstance(name, six.string_types):
             raise ValueError("Invalid name: %s" % repr(name))
         response = self.post(__conf=name)
         if response.status == 303:
@@ -1634,6 +1767,103 @@ class Stanza(Entity):
         return len([x for x in self._state.content.keys()
                     if not x.startswith('eai') and x != 'disabled'])
 
+
+class StoragePassword(Entity):
+    """This class contains a storage password.
+    """
+    def __init__(self, service, path, **kwargs):
+        state = kwargs.get('state', None)
+        kwargs['skip_refresh'] = kwargs.get('skip_refresh', state is not None)
+        super(StoragePassword, self).__init__(service, path, **kwargs)
+        self._state = state
+
+    @property
+    def clear_password(self):
+        return self.content.get('clear_password')
+
+    @property
+    def encrypted_password(self):
+        return self.content.get('encr_password')
+
+    @property
+    def realm(self):
+        return self.content.get('realm')
+
+    @property
+    def username(self):
+        return self.content.get('username')
+
+
+class StoragePasswords(Collection):
+    """This class provides access to the storage passwords from this Splunk
+    instance. Retrieve this collection using :meth:`Service.storage_passwords`.
+    """
+    def __init__(self, service):
+        if service.namespace.owner == '-' or service.namespace.app == '-':
+            raise ValueError("StoragePasswords cannot have wildcards in namespace.")
+        super(StoragePasswords, self).__init__(service, PATH_STORAGE_PASSWORDS, item=StoragePassword)
+
+    def create(self, password, username, realm=None):
+        """ Creates a storage password.
+
+        A `StoragePassword` can be identified by <username>, or by <realm>:<username> if the
+        optional realm parameter is also provided.
+
+        :param password: The password for the credentials - this is the only part of the credentials that will be stored securely.
+        :type name: ``string``
+        :param username: The username for the credentials.
+        :type name: ``string``
+        :param realm: The credential realm. (optional)
+        :type name: ``string``
+
+        :return: The :class:`StoragePassword` object created.
+        """
+        if not isinstance(username, six.string_types):
+            raise ValueError("Invalid name: %s" % repr(username))
+
+        if realm is None:
+            response = self.post(password=password, name=username)
+        else:
+            response = self.post(password=password, realm=realm, name=username)
+
+        if response.status != 201:
+            raise ValueError("Unexpected status code %s returned from creating a stanza" % response.status)
+
+        entries = _load_atom_entries(response)
+        state = _parse_atom_entry(entries[0])
+        storage_password = StoragePassword(self.service, self._entity_path(state), state=state, skip_refresh=True)
+
+        return storage_password
+
+    def delete(self, username, realm=None):
+        """Delete a storage password by username and/or realm.
+
+        The identifier can be passed in through the username parameter as
+        <username> or <realm>:<username>, but the preferred way is by
+        passing in the username and realm parameters.
+
+        :param username: The username for the credentials, or <realm>:<username> if the realm parameter is omitted.
+        :type name: ``string``
+        :param realm: The credential realm. (optional)
+        :type name: ``string``
+        :return: The `StoragePassword` collection.
+        :rtype: ``self``
+        """
+        if realm is None:
+            # This case makes the username optional, so
+            # the full name can be passed in as realm.
+            # Assume it's already encoded.
+            name = username
+        else:
+            # Encode each component separately
+            name = UrlEncoded(realm, encode_slash=True) + ":" + UrlEncoded(username, encode_slash=True)
+
+        # Append the : expected at the end of the name
+        if name[-1] is not ":":
+            name = name + ":"
+        return Collection.delete(self, name)
+
+
 class AlertGroup(Entity):
     """This class represents a group of fired alerts for a saved search. Access
     it using the :meth:`alerts` property."""
@@ -1659,6 +1889,7 @@ class AlertGroup(Entity):
         :rtype: ``integer``
         """
         return int(self.content.get('triggered_alert_count', 0))
+
 
 class Indexes(Collection):
     """This class contains the collection of indexes in this Splunk instance.
@@ -1687,6 +1918,7 @@ class Indexes(Collection):
             raise IllegalOperationException("Deleting indexes via the REST API is "
                                             "not supported before Splunk version 5.")
 
+
 class Index(Entity):
     """This class represents an index and provides different operations, such as
     cleaning the index, writing to the index, and so forth."""
@@ -1710,18 +1942,27 @@ class Index(Entity):
         if host is not None: args['host'] = host
         if source is not None: args['source'] = source
         if sourcetype is not None: args['sourcetype'] = sourcetype
-        path = UrlEncoded(PATH_RECEIVERS_STREAM + "?" + urllib.urlencode(args), skip_encode=True)
+        path = UrlEncoded(PATH_RECEIVERS_STREAM + "?" + urllib.parse.urlencode(args), skip_encode=True)
+
+        cookie_or_auth_header = "Authorization: Splunk %s\r\n" % \
+                                (self.service.token if self.service.token is _NoAuthenticationToken
+                                 else self.service.token.replace("Splunk ", ""))
+
+        # If we have cookie(s), use them instead of "Authorization: ..."
+        if self.service.has_cookies():
+            cookie_or_auth_header = "Cookie: %s\r\n" % _make_cookie_header(self.service.get_cookies().items())
 
         # Since we need to stream to the index connection, we have to keep
         # the connection open and use the Splunk extension headers to note
         # the input mode
         sock = self.service.connect()
-        headers = ["POST %s HTTP/1.1\r\n" % self.service._abspath(path),
-                   "Host: %s:%s\r\n" % (self.service.host, int(self.service.port)),
-                   "Accept-Encoding: identity\r\n",
-                   "Authorization: %s\r\n" % self.service.token,
-                   "X-Splunk-Input-Mode: Streaming\r\n",
-                   "\r\n"]
+        headers = [("POST %s HTTP/1.1\r\n" % str(self.service._abspath(path))).encode('utf-8'),
+                   ("Host: %s:%s\r\n" % (self.service.host, int(self.service.port))).encode('utf-8'),
+                   b"Accept-Encoding: identity\r\n",
+                   cookie_or_auth_header.encode('utf-8'),
+                   b"X-Splunk-Input-Mode: Streaming\r\n",
+                   b"\r\n"]
+        
         for h in headers:
             sock.write(h)
         return sock
@@ -1773,7 +2014,7 @@ class Index(Entity):
         :return: The :class:`Index`.
         """
         self.refresh()
-        
+
         tds = self['maxTotalDataSizeMB']
         ftp = self['frozenTimePeriodInSecs']
         was_disabled_initially = self.disabled
@@ -1792,10 +2033,9 @@ class Index(Entity):
             while self.content.totalEventCount != '0' and datetime.now() < start+diff:
                 sleep(1)
                 self.refresh()
-            
+
             if self.content.totalEventCount != '0':
-                raise OperationError, "Cleaning index %s took longer than %s seconds; timing out." %\
-                                      (self.name, timeout)
+                raise OperationError("Cleaning index %s took longer than %s seconds; timing out." % (self.name, timeout))
         finally:
             # Restore original values
             self.update(maxTotalDataSizeMB=tds, frozenTimePeriodInSecs=ftp)
@@ -1860,6 +2100,7 @@ class Index(Entity):
         self.service.post(path, name=filename, **kwargs)
         return self
 
+
 class Input(Entity):
     """This class represents a Splunk input. This class is the base for all
     typed input classes and is also used when the client does not recognize an
@@ -1919,7 +2160,7 @@ class Input(Entity):
 
             if 'restrictToHost' in kwargs:
                 raise IllegalOperationException("Cannot set restrictToHost on an existing input with the SDK.")
-            elif 'restrictToHost' in self._state.content:
+            elif 'restrictToHost' in self._state.content and self.kind != 'udp':
                 to_update['restrictToHost'] = self._state.content['restrictToHost']
 
             # Do the actual update operation.
@@ -1939,27 +2180,32 @@ class Inputs(Collection):
         Collection.__init__(self, service, PATH_INPUTS, item=Input)
 
     def __getitem__(self, key):
+        # The key needed to retrieve the input needs it's parenthesis to be URL encoded
+        # based on the REST API for input
+        # <http://docs.splunk.com/Documentation/Splunk/latest/RESTAPI/RESTinput>
         if isinstance(key, tuple) and len(key) == 2:
             # Fetch a single kind
             key, kind = key
+            key = UrlEncoded(key, encode_slash=True)
             try:
                 response = self.get(self.kindpath(kind) + "/" + key)
                 entries = self._load_list(response)
                 if len(entries) > 1:
                     raise AmbiguousReferenceException("Found multiple inputs of kind %s named %s." % (kind, key))
                 elif len(entries) == 0:
-                    raise KeyError((kind,key))
+                    raise KeyError((key, kind))
                 else:
                     return entries[0]
             except HTTPError as he:
                 if he.status == 404: # No entity matching kind and key
-                    raise KeyError((kind,key))
+                    raise KeyError((key, kind))
                 else:
                     raise
         else:
             # Iterate over all the kinds looking for matches.
             kind = None
             candidate = None
+            key = UrlEncoded(key, encode_slash=True)
             for kind in self.kinds:
                 try:
                     response = self.get(kind + "/" + key)
@@ -1978,7 +2224,7 @@ class Inputs(Collection):
                     else:
                         raise
             if candidate is None:
-                raise KeyError(key) # Never found a match
+                raise KeyError(key) # Never found a match.
             else:
                 return candidate
 
@@ -2051,11 +2297,14 @@ class Inputs(Collection):
         # If we created an input with restrictToHost set, then
         # its path will be <restrictToHost>:<name>, not just <name>,
         # and we have to adjust accordingly.
+
+        # Url encodes the name of the entity.
+        name = UrlEncoded(name, encode_slash=True)
         path = _path(
             self.path + kindpath,
             '%s:%s' % (kwargs['restrictToHost'], name) \
-                if kwargs.has_key('restrictToHost') else name
-        )
+                if 'restrictToHost' in kwargs else name
+                )
         return Input(self.service, path, kind)
 
     def delete(self, name, kind=None):
@@ -2132,7 +2381,7 @@ class Inputs(Collection):
     def _get_kind_list(self, subpath=None):
         if subpath is None:
             subpath = []
-        
+
         kinds = []
         response = self.get('/'.join(subpath))
         content = _load_atom_entries(response)
@@ -2189,15 +2438,12 @@ class Inputs(Collection):
         :return: The relative endpoint path.
         :rtype: ``string``
         """
-        if kind in self.kinds:
-            return kind
-        # Special cases
-        elif kind == 'tcp':
-            return 'tcp/raw'
+        if kind == 'tcp':
+            return UrlEncoded('tcp/raw', skip_encode=True)
         elif kind == 'splunktcp':
-            return 'tcp/cooked'
+            return UrlEncoded('tcp/cooked', skip_encode=True)
         else:
-            raise ValueError("No such kind on server: %s" % kind)
+            return UrlEncoded(kind, skip_encode=True)
 
     def list(self, *kinds, **kwargs):
         """Returns a list of inputs that are in the :class:`Inputs` collection.
@@ -2262,8 +2508,9 @@ class Inputs(Collection):
             path = self.kindpath(kind)
             logging.debug("Path for inputs: %s", path)
             try:
+                path = UrlEncoded(path, skip_encode=True)
                 response = self.get(path, **kwargs)
-            except HTTPError, he:
+            except HTTPError as he:
                 if he.status == 404: # No inputs of this kind
                     return []
             entities = []
@@ -2275,7 +2522,7 @@ class Inputs(Collection):
                 # Unquote the URL, since all URL encoded in the SDK
                 # should be of type UrlEncoded, and all str should not
                 # be URL encoded.
-                path = urllib.unquote(state.links.alternate)
+                path = urllib.parse.unquote(state.links.alternate)
                 entity = Input(self.service, path, kind, state=state)
                 entities.append(entity)
             return entities
@@ -2286,6 +2533,7 @@ class Inputs(Collection):
         for kind in kinds:
             response = None
             try:
+                kind = UrlEncoded(kind, skip_encode=True)
                 response = self.get(self.kindpath(kind), search=search)
             except HTTPError as e:
                 if e.status == 404:
@@ -2300,7 +2548,7 @@ class Inputs(Collection):
                 # Unquote the URL, since all URL encoded in the SDK
                 # should be of type UrlEncoded, and all str should not
                 # be URL encoded.
-                path = urllib.unquote(state.links.alternate)
+                path = urllib.parse.unquote(state.links.alternate)
                 entity = Input(self.service, path, kind, state=state)
                 entities.append(entity)
         if 'offset' in kwargs:
@@ -2372,7 +2620,6 @@ class Job(Entity):
         path = PATH_JOBS + sid
         Entity.__init__(self, service, path, skip_refresh=True, **kwargs)
         self.sid = sid
-        self._is_ready = False
 
     # The Job entry record is returned at the root of the response
     def _load_atom_entry(self, response):
@@ -2423,6 +2670,7 @@ class Job(Entity):
 
         :return: The ``InputStream`` IO handle to this job's events.
         """
+        kwargs['segmentation'] = kwargs.get('segmentation', 'none')
         return self.get("events", **kwargs).body
 
     def finalize(self):
@@ -2439,21 +2687,24 @@ class Job(Entity):
         :return: ``True`` if the job is done, ``False`` if not.
         :rtype: ``boolean``
         """
-        if (not self.is_ready()):
+        if not self.is_ready():
             return False
-        self.refresh()
-        return self['isDone'] == '1'
+        done = (self._state.content['isDone'] == '1')
+        return done
 
     def is_ready(self):
         """Indicates whether this job is ready for querying.
 
         :return: ``True`` if the job is ready, ``False`` if not.
         :rtype: ``boolean``
+
         """
-        if self.get().status == 204:
+        response = self.get()
+        if response.status == 204:
             return False
-        else:
-            return True
+        self._state = self.read(response)
+        ready = self._state.content['dispatchState'] not in ['QUEUED', 'PARSING']
+        return ready
 
     @property
     def name(self):
@@ -2508,6 +2759,7 @@ class Job(Entity):
 
         :return: The ``InputStream`` IO handle to this job's results.
         """
+        query_params['segmentation'] = query_params.get('segmentation', 'none')
         return self.get("results", **query_params).body
 
     def preview(self, **query_params):
@@ -2550,6 +2802,7 @@ class Job(Entity):
 
         :return: The ``InputStream`` IO handle to this job's preview results.
         """
+        query_params['segmentation'] = query_params.get('segmentation', 'none')
         return self.get("results_preview", **query_params).body
 
     def searchlog(self, **kwargs):
@@ -2634,6 +2887,7 @@ class Job(Entity):
         self.post("control", action="unpause")
         return self
 
+
 class Jobs(Collection):
     """This class represents a collection of search jobs. Retrieve this
     collection using :meth:`Service.jobs`."""
@@ -2695,10 +2949,11 @@ class Jobs(Collection):
                     # Normal events are returned as dicts
                     print result
             assert rr.is_preview == False
-        
-        Running an export search is more efficient than running a similar
-        preview search because no post-processing is done on the retrieved
-        events. The raw events are simply returned.
+
+        Running an export search is more efficient as it streams the results
+        directly to you, rather than having to write them out to disk and make
+        them available later. As soon as results are ready, you will receive
+        them.
 
         The ``export`` method makes a single roundtrip to the server (as opposed
         to two for :meth:`create` followed by :meth:`preview`), plus at most two
@@ -2717,7 +2972,10 @@ class Jobs(Collection):
         """
         if "exec_mode" in params:
             raise TypeError("Cannot specify an exec_mode to export.")
-        return self.post(path_segment="export", search=query, **params).body
+        params['segmentation'] = params.get('segmentation', 'none')
+        return self.post(path_segment="export",
+                         search=query,
+                         **params).body
 
     def itemmeta(self):
         """There is no metadata available for class:``Jobs``.
@@ -2777,7 +3035,10 @@ class Jobs(Collection):
         """
         if "exec_mode" in params:
             raise TypeError("Cannot specify an exec_mode to oneshot.")
-        return self.post(search=query, exec_mode="oneshot", **params).body
+        params['segmentation'] = params.get('segmentation', 'none')
+        return self.post(search=query,
+                         exec_mode="oneshot",
+                         **params).body
 
 
 class Loggers(Collection):
@@ -2795,6 +3056,7 @@ class Loggers(Collection):
         """
         raise NotSupportedError()
 
+
 class Message(Entity):
     def __init__(self, service, path, **kwargs):
         Entity.__init__(self, service, path, **kwargs)
@@ -2803,9 +3065,11 @@ class Message(Entity):
     def value(self):
         """Returns the message value.
 
-        :return: The :class:`Loggers` collection.
+        :return: The message value.
+        :rtype: ``string``
         """
         return self[self.name]
+
 
 class ModularInputKind(Entity):
     """This class contains the different types of modular inputs. Retrieve this
@@ -2972,7 +3236,7 @@ class SavedSearch(Entity):
 
         :return: The :class:`SavedSearch`.
         """
-        self.post("suppress", suppressed="1", expiration=expiration)
+        self.post("suppress", expiration=expiration)
         return self
 
     @property
@@ -2994,7 +3258,7 @@ class SavedSearch(Entity):
 
         :return: The :class:`SavedSearch`.
         """
-        self.post("suppress", suppressed="0", expiration="0")
+        self.post("suppress", expiration="0")
         return self
 
 
@@ -3021,11 +3285,12 @@ class SavedSearches(Collection):
         """
         return Collection.create(self, name, search=search, **kwargs)
 
+
 class Settings(Entity):
     """This class represents configuration settings for a Splunk service.
     Retrieve this collection using :meth:`Service.settings`."""
     def __init__(self, service, **kwargs):
-        Entity.__init__(self, service, "server/settings", **kwargs)
+        Entity.__init__(self, service, "/services/server/settings", **kwargs)
 
     # Updates on the settings endpoint are POSTed to server/settings/settings.
     def update(self, **kwargs):
@@ -3038,8 +3303,9 @@ class Settings(Entity):
         :type kwargs: ``dict``
         :return: The :class:`Settings` collection.
         """
-        self.service.post("server/settings/settings", **kwargs)
+        self.service.post("/services/server/settings/settings", **kwargs)
         return self
+
 
 class User(Entity):
     """This class represents a Splunk user.
@@ -3052,6 +3318,7 @@ class User(Entity):
         :rtype: ``list``
         """
         return [self.service.roles[name] for name in self.content.roles]
+
 
 # Splunk automatically lowercases new user names so we need to match that
 # behavior here to ensure that the subsequent member lookup works correctly.
@@ -3098,7 +3365,7 @@ class Users(Collection):
             boris = users.create("boris", "securepassword", roles="user")
             hilda = users.create("hilda", "anotherpassword", roles=["user","power"])
         """
-        if not isinstance(username, basestring):
+        if not isinstance(username, six.string_types):
             raise ValueError("Invalid username: %s" % str(username))
         username = username.lower()
         self.post(name=username, password=password, roles=roles, **params)
@@ -3109,7 +3376,7 @@ class Users(Collection):
         state = _parse_atom_entry(entry)
         entity = self.item(
             self.service,
-            urllib.unquote(state.links.alternate),
+            urllib.parse.unquote(state.links.alternate),
             state=state)
         return entity
 
@@ -3184,7 +3451,6 @@ class Role(Entity):
         return self
 
 
-
 class Roles(Collection):
     """This class represents the collection of roles in the Splunk instance.
     Retrieve this collection using :meth:`Service.roles`."""
@@ -3222,7 +3488,7 @@ class Roles(Collection):
             roles = c.roles
             paltry = roles.create("paltry", imported_roles="user", defaultApp="search")
         """
-        if not isinstance(name, basestring):
+        if not isinstance(name, six.string_types):
             raise ValueError("Invalid role name: %s" % str(name))
         name = name.lower()
         self.post(name=name, **params)
@@ -3233,7 +3499,7 @@ class Roles(Collection):
         state = _parse_atom_entry(entry)
         entity = self.item(
             self.service,
-            urllib.unquote(state.links.alternate),
+            urllib.parse.unquote(state.links.alternate),
             state=state)
         return entity
 
@@ -3266,6 +3532,193 @@ class Application(Entity):
         """Returns any update information that is available for the app."""
         return self._run_action("update")
 
+class KVStoreCollections(Collection):
+    def __init__(self, service):
+        Collection.__init__(self, service, 'storage/collections/config', item=KVStoreCollection)
 
+    def create(self, name, indexes = {}, fields = {}, **kwargs):
+        """Creates a KV Store Collection.
 
+        :param name: name of collection to create
+        :type name: ``string``
+        :param indexes: dictionary of index definitions
+        :type indexes: ``dict``
+        :param fields: dictionary of field definitions
+        :type fields: ``dict``
+        :param kwargs: a dictionary of additional parameters specifying indexes and field definitions
+        :type kwargs: ``dict``
 
+        :return: Result of POST request
+        """
+        for k, v in six.iteritems(indexes):
+            if isinstance(v, dict):
+                v = json.dumps(v)
+            kwargs['index.' + k] = v
+        for k, v in six.iteritems(fields):
+            kwargs['field.' + k] = v
+        return self.post(name=name, **kwargs)
+
+class KVStoreCollection(Entity):
+    @property
+    def data(self):
+        """Returns data object for this Collection.
+
+        :rtype: :class:`KVStoreData`
+        """
+        return KVStoreCollectionData(self)
+
+    def update_index(self, name, value):
+        """Changes the definition of a KV Store index.
+
+        :param name: name of index to change
+        :type name: ``string``
+        :param value: new index definition
+        :type value: ``dict`` or ``string``
+
+        :return: Result of POST request
+        """
+        kwargs = {}
+        kwargs['index.' + name] = value if isinstance(value, basestring) else json.dumps(value)
+        return self.post(**kwargs)
+
+    def update_field(self, name, value):
+        """Changes the definition of a KV Store field.
+
+        :param name: name of field to change
+        :type name: ``string``
+        :param value: new field definition
+        :type value: ``string``
+
+        :return: Result of POST request
+        """
+        kwargs = {}
+        kwargs['field.' + name] = value
+        return self.post(**kwargs)
+
+class KVStoreCollectionData(object):
+    """This class represents the data endpoint for a KVStoreCollection.
+
+    Retrieve using :meth:`KVStoreCollection.data`
+    """
+    JSON_HEADER = [('Content-Type', 'application/json')]
+
+    def __init__(self, collection):
+        self.service = collection.service
+        self.collection = collection
+        self.owner, self.app, self.sharing = collection._proper_namespace()
+        self.path = 'storage/collections/data/' + UrlEncoded(self.collection.name) + '/'
+
+    def _get(self, url, **kwargs):
+        return self.service.get(self.path + url, owner=self.owner, app=self.app, sharing=self.sharing, **kwargs)
+
+    def _post(self, url, **kwargs):
+        return self.service.post(self.path + url, owner=self.owner, app=self.app, sharing=self.sharing, **kwargs)
+
+    def _delete(self, url, **kwargs):
+        return self.service.delete(self.path + url, owner=self.owner, app=self.app, sharing=self.sharing, **kwargs)
+
+    def query(self, **query):
+        """
+        Gets the results of query, with optional parameters sort, limit, skip, and fields.
+
+        :param query: Optional parameters. Valid options are sort, limit, skip, and fields
+        :type query: ``dict``
+
+        :return: Array of documents retrieved by query.
+        :rtype: ``array``
+        """
+        return json.loads(self._get('', **query).body.read().decode('utf-8'))
+
+    def query_by_id(self, id):
+        """
+        Returns object with _id = id.
+
+        :param id: Value for ID. If not a string will be coerced to string.
+        :type id: ``string``
+
+        :return: Document with id
+        :rtype: ``dict``
+        """
+        return json.loads(self._get(UrlEncoded(str(id))).body.read().decode('utf-8'))
+
+    def insert(self, data):
+        """
+        Inserts item into this collection. An _id field will be generated if not assigned in the data.
+
+        :param data: Document to insert
+        :type data: ``string``
+
+        :return: _id of inserted object
+        :rtype: ``dict``
+        """
+        return json.loads(self._post('', headers=KVStoreCollectionData.JSON_HEADER, body=data).body.read().decode('utf-8'))
+
+    def delete(self, query=None):
+        """
+        Deletes all data in collection if query is absent. Otherwise, deletes all data matched by query.
+
+        :param query: Query to select documents to delete
+        :type query: ``string``
+
+        :return: Result of DELETE request
+        """
+        return self._delete('', **({'query': query}) if query else {})
+
+    def delete_by_id(self, id):
+        """
+        Deletes document that has _id = id.
+
+        :param id: id of document to delete
+        :type id: ``string``
+
+        :return: Result of DELETE request
+        """
+        return self._delete(UrlEncoded(str(id)))
+
+    def update(self, id, data):
+        """
+        Replaces document with _id = id with data.
+
+        :param id: _id of document to update
+        :type id: ``string``
+        :param data: the new document to insert
+        :type data: ``string``
+
+        :return: id of replaced document
+        :rtype: ``dict``
+        """
+        return json.loads(self._post(UrlEncoded(str(id)), headers=KVStoreCollectionData.JSON_HEADER, body=data).body.read().decode('utf-8'))
+
+    def batch_find(self, *dbqueries):
+        """
+        Returns array of results from queries dbqueries.
+
+        :param dbqueries: Array of individual queries as dictionaries
+        :type dbqueries: ``array`` of ``dict``
+        
+        :return: Results of each query
+        :rtype: ``array`` of ``array``
+        """
+        if len(dbqueries) < 1: 
+            raise Exception('Must have at least one query.')
+        
+        data = json.dumps(dbqueries)
+
+        return json.loads(self._post('batch_find', headers=KVStoreCollectionData.JSON_HEADER, body=data).body.read().decode('utf-8'))
+
+    def batch_save(self, *documents):
+        """
+        Inserts or updates every document specified in documents.
+
+        :param documents: Array of documents to save as dictionaries
+        :type documents: ``array`` of ``dict``
+        
+        :return: Results of update operation as overall stats
+        :rtype: ``dict``
+        """
+        if len(documents) < 1: 
+            raise Exception('Must have at least one document.')
+        
+        data = json.dumps(documents)
+
+        return json.loads(self._post('batch_save', headers=KVStoreCollectionData.JSON_HEADER, body=data).body.read().decode('utf-8'))

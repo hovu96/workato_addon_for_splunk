@@ -1,3 +1,4 @@
+import fix_path
 import sys, os, datetime, json, urllib2
 import splunklib.client as client
 from splunklib.binding import _spliturl as spliturl

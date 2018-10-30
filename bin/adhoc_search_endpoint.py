@@ -1,7 +1,8 @@
+import fix_path
 import json
 import time
-from splunklib import results as results_lib
 from .base_handler import BaseRestHandler
+from splunklib import results as results_lib
 from .utils import workato_app_name
 from .alert_action_utils import add_callback, remove_callback, has_workato_alert_action
 

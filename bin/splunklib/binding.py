@@ -1,4 +1,4 @@
-# Copyright 2011-2012 Splunk, Inc.
+# Copyright 2011-2015 Splunk, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"): you may
 # not use this file except in compliance with the License. You may obtain
@@ -12,33 +12,43 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-"""The **splunklib.binding** module provides a low-level binding interface to the 
+"""The **splunklib.binding** module provides a low-level binding interface to the
 `Splunk REST API <http://docs.splunk.com/Documentation/Splunk/latest/RESTAPI/RESTcontents>`_.
 
-This module handles the wire details of calling the REST API, such as 
-authentication tokens, prefix paths, URL encoding, and so on. Actual path 
-segments, ``GET`` and ``POST`` arguments, and the parsing of responses is left 
+This module handles the wire details of calling the REST API, such as
+authentication tokens, prefix paths, URL encoding, and so on. Actual path
+segments, ``GET`` and ``POST`` arguments, and the parsing of responses is left
 to the user.
 
-If you want a friendlier interface to the Splunk REST API, use the 
+If you want a friendlier interface to the Splunk REST API, use the
 :mod:`splunklib.client` module.
 """
 
-import httplib
+from __future__ import absolute_import
+import logging
 import socket
 import ssl
-import urllib
-import functools
-import logging
+from io import BytesIO
+
+from splunklib.six.moves import urllib
+import io
+import sys
+
+from base64 import b64encode
 from datetime import datetime
 from functools import wraps
-from StringIO import StringIO
+from splunklib.six import StringIO
 
 from contextlib import contextmanager
 
 from xml.etree.ElementTree import XML
+from splunklib import six
+try:
+    from xml.etree.ElementTree import ParseError
+except ImportError as e:
+    from xml.parsers.expat import ExpatError as ParseError
 
-from data import record
+from .data import record
 
 __all__ = [
     "AuthenticationError",
@@ -48,7 +58,7 @@ __all__ = [
     "HTTPError"
 ]
 
-# If you change these, update the docstring 
+# If you change these, update the docstring
 # on _authority as well.
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = "8089"
@@ -64,6 +74,46 @@ def _log_duration(f):
         return val
     return new_f
 
+
+def _parse_cookies(cookie_str, dictionary):
+    """Tries to parse any key-value pairs of cookies in a string,
+    then updates the the dictionary with any key-value pairs found.
+
+    **Example**::
+        dictionary = {}
+        _parse_cookies('my=value', dictionary)
+        # Now the following is True
+        dictionary['my'] == 'value'
+
+    :param cookie_str: A string containing "key=value" pairs from an HTTP "Set-Cookie" header.
+    :type cookie_str: ``str``
+    :param dictionary: A dictionary to update with any found key-value pairs.
+    :type dictionary: ``dict``
+    """
+    parsed_cookie = six.moves.http_cookies.SimpleCookie(cookie_str)
+    for cookie in parsed_cookie.values():
+        dictionary[cookie.key] = cookie.coded_value
+
+
+def _make_cookie_header(cookies):
+    """
+    Takes a list of 2-tuples of key-value pairs of
+    cookies, and returns a valid HTTP ``Cookie``
+    header.
+
+    **Example**::
+
+        header = _make_cookie_header([("key", "value"), ("key_2", "value_2")])
+        # Now the following is True
+        header == "key=value; key_2=value_2"
+
+    :param cookies: A list of 2-tuples of cookie key-value pairs.
+    :type cookies: ``list`` of 2-tuples
+    :return: ``str` An HTTP header cookie string.
+    :rtype: ``str``
+    """
+    return "; ".join("%s=%s" % (key, value) for key, value in cookies)
+
 # Singleton values to eschew None
 class _NoAuthenticationToken(object):
     """The value stored in a :class:`Context` or :class:`splunklib.client.Service`
@@ -71,7 +121,7 @@ class _NoAuthenticationToken(object):
 
     If a ``Context`` or ``Service`` object is created without an authentication
     token, and there has not yet been a call to the ``login`` method, the token
-    field of the ``Context`` or ``Service`` object is set to 
+    field of the ``Context`` or ``Service`` object is set to
     ``_NoAuthenticationToken``.
 
     Likewise, after a ``Context`` or ``Service`` object has been logged out, the
@@ -79,24 +129,25 @@ class _NoAuthenticationToken(object):
     """
     pass
 
+
 class UrlEncoded(str):
     """This class marks URL-encoded strings.
     It should be considered an SDK-private implementation detail.
 
-    Manually tracking whether strings are URL encoded can be difficult. Avoid 
-    calling ``urllib.quote`` to replace special characters with escapes. When 
-    you receive a URL-encoded string, *do* use ``urllib.unquote`` to replace 
-    escapes with single characters. Then, wrap any string you want to use as a 
-    URL in ``UrlEncoded``. Note that because the ``UrlEncoded`` class is 
+    Manually tracking whether strings are URL encoded can be difficult. Avoid
+    calling ``urllib.quote`` to replace special characters with escapes. When
+    you receive a URL-encoded string, *do* use ``urllib.unquote`` to replace
+    escapes with single characters. Then, wrap any string you want to use as a
+    URL in ``UrlEncoded``. Note that because the ``UrlEncoded`` class is
     idempotent, making multiple calls to it is OK.
-    
-    ``UrlEncoded`` objects are identical to ``str`` objects (including being 
-    equal if their contents are equal) except when passed to ``UrlEncoded`` 
+
+    ``UrlEncoded`` objects are identical to ``str`` objects (including being
+    equal if their contents are equal) except when passed to ``UrlEncoded``
     again.
-    
-    ``UrlEncoded`` removes the ``str`` type support for interpolating values 
-    with ``%`` (doing that raises a ``TypeError``). There is no reliable way to 
-    encode values this way, so instead, interpolate into a string, quoting by 
+
+    ``UrlEncoded`` removes the ``str`` type support for interpolating values
+    with ``%`` (doing that raises a ``TypeError``). There is no reliable way to
+    encode values this way, so instead, interpolate into a string, quoting by
     hand, and call ``UrlEncode`` with ``skip_encode=True``.
 
     **Example**::
@@ -112,17 +163,19 @@ class UrlEncoded(str):
         UrlEncoded('ab c') + 'de f' == UrlEncoded('ab cde f')
         'ab c' + UrlEncoded('de f') == UrlEncoded('ab cde f')
     """
-    def __new__(self, val='', skip_encode=False):
+    def __new__(self, val='', skip_encode=False, encode_slash=False):
         if isinstance(val, UrlEncoded):
             # Don't urllib.quote something already URL encoded.
             return val
         elif skip_encode:
             return str.__new__(self, val)
+        elif encode_slash:
+            return str.__new__(self, urllib.parse.quote_plus(val))
         else:
             # When subclassing str, just call str's __new__ method
             # with your class and the value you want to have in the
             # new string.
-            return str.__new__(self, urllib.quote(val))
+            return str.__new__(self, urllib.parse.quote(val))
 
     def __add__(self, other):
         """self + other
@@ -133,7 +186,7 @@ class UrlEncoded(str):
         if isinstance(other, UrlEncoded):
             return UrlEncoded(str.__add__(self, other), skip_encode=True)
         else:
-            return UrlEncoded(str.__add__(self, urllib.quote(other)), skip_encode=True)
+            return UrlEncoded(str.__add__(self, urllib.parse.quote(other)), skip_encode=True)
 
     def __radd__(self, other):
         """other + self
@@ -144,7 +197,7 @@ class UrlEncoded(str):
         if isinstance(other, UrlEncoded):
             return UrlEncoded(str.__radd__(self, other), skip_encode=True)
         else:
-            return UrlEncoded(str.__add__(urllib.quote(other), self), skip_encode=True)
+            return UrlEncoded(str.__add__(urllib.parse.quote(other), self), skip_encode=True)
 
     def __mod__(self, fields):
         """Interpolation into ``UrlEncoded``s is disabled.
@@ -154,7 +207,7 @@ class UrlEncoded(str):
         """
         raise TypeError("Cannot interpolate into a UrlEncoded object.")
     def __repr__(self):
-        return "UrlEncoded(%s)" % repr(urllib.unquote(self))
+        return "UrlEncoded(%s)" % repr(urllib.parse.unquote(str(self)))
 
 @contextmanager
 def _handle_auth_error(msg):
@@ -218,7 +271,8 @@ def _authentication(request_fun):
     """
     @wraps(request_fun)
     def wrapper(self, *args, **kwargs):
-        if self.token is _NoAuthenticationToken:
+        if self.token is _NoAuthenticationToken and \
+                not self.has_cookies():
             # Not yet logged in.
             if self.autologin and self.username and self.password:
                 # This will throw an uncaught
@@ -240,13 +294,18 @@ def _authentication(request_fun):
                 # an AuthenticationError and give up.
                 with _handle_auth_error("Autologin failed."):
                     self.login()
-                with _handle_auth_error("Autologin succeeded, but there was an auth error on next request. Something's very wrong."):
-                    return request_fun()
+                with _handle_auth_error(
+                        "Autologin succeeded, but there was an auth error on "
+                        "next request. Something is very wrong."):
+                    return request_fun(self, *args, **kwargs)
             elif he.status == 401 and not self.autologin:
-                raise AuthenticationError("Request failed: Session is not logged in.", he)
+                raise AuthenticationError(
+                    "Request failed: Session is not logged in.", he)
             else:
                 raise
+
     return wrapper
+
 
 def _authority(scheme=DEFAULT_SCHEME, host=DEFAULT_HOST, port=DEFAULT_PORT):
     """Construct a URL authority from the given *scheme*, *host*, and *port*.
@@ -284,9 +343,9 @@ def _authority(scheme=DEFAULT_SCHEME, host=DEFAULT_HOST, port=DEFAULT_PORT):
 
         _authority(scheme="http", host="splunk.utopia.net", port="471") == \
             "http://splunk.utopia.net:471"
-        
+
     """
-    if ':' in host: 
+    if ':' in host:
         # IPv6 addresses must be enclosed in [ ] in order to be well
         # formed.
         host = '[' + host + ']'
@@ -297,16 +356,16 @@ def namespace(sharing=None, owner=None, app=None, **kwargs):
     """This function constructs a Splunk namespace.
 
     Every Splunk resource belongs to a namespace. The namespace is specified by
-    the pair of values ``owner`` and ``app`` and is governed by a ``sharing`` mode. 
-    The possible values for ``sharing`` are: "user", "app", "global" and "system", 
+    the pair of values ``owner`` and ``app`` and is governed by a ``sharing`` mode.
+    The possible values for ``sharing`` are: "user", "app", "global" and "system",
     which map to the following combinations of ``owner`` and ``app`` values:
-    
+
         "user"   => {owner}, {app}
 
         "app"    => nobody, {app}
-        
+
         "global" => nobody, {app}
-        
+
         "system" => nobody, system
 
     "nobody" is a special user name that basically means no user, and "system"
@@ -315,18 +374,18 @@ def namespace(sharing=None, owner=None, app=None, **kwargs):
     "-" is a wildcard that can be used for both ``owner`` and ``app`` values and
     refers to all users and all apps, respectively.
 
-    In general, when you specify a namespace you can specify any combination of 
+    In general, when you specify a namespace you can specify any combination of
     these three values and the library will reconcile the triple, overriding the
     provided values as appropriate.
 
     Finally, if no namespacing is specified the library will make use of the
     ``/services`` branch of the REST API, which provides a namespaced view of
-    Splunk resources equivelent to using ``owner={currentUser}`` and 
+    Splunk resources equivelent to using ``owner={currentUser}`` and
     ``app={defaultApp}``.
 
     The ``namespace`` function returns a representation of the namespace from
-    reconciling the values you provide. It ignores any keyword arguments other 
-    than ``owner``, ``app``, and ``sharing``, so you can provide ``dicts`` of 
+    reconciling the values you provide. It ignores any keyword arguments other
+    than ``owner``, ``app``, and ``sharing``, so you can provide ``dicts`` of
     configuration information without first having to extract individual keys.
 
     :param sharing: The sharing mode (the default is "user").
@@ -335,7 +394,7 @@ def namespace(sharing=None, owner=None, app=None, **kwargs):
     :type owner: ``string``
     :param app: The app context (the default is "None").
     :type app: ``string``
-    :returns: A :class:`splunklib.data.Record` containing the reconciled 
+    :returns: A :class:`splunklib.data.Record` containing the reconciled
         namespace.
 
     **Example**::
@@ -352,16 +411,17 @@ def namespace(sharing=None, owner=None, app=None, **kwargs):
         return record({'sharing': sharing, 'owner': owner, 'app': app})
     raise ValueError("Invalid value for argument: 'sharing'")
 
+
 class Context(object):
     """This class represents a context that encapsulates a splunkd connection.
 
     The ``Context`` class encapsulates the details of HTTP requests,
-    authentication, a default namespace, and URL prefixes to simplify access to 
+    authentication, a default namespace, and URL prefixes to simplify access to
     the REST API.
-            
+
     After creating a ``Context`` object, you must call its :meth:`login`
     method before you can issue requests to splunkd. Or, use the :func:`connect`
-    function to create an already-authenticated ``Context`` object. You can 
+    function to create an already-authenticated ``Context`` object. You can
     provide a session token explicitly (the same token can be shared by multiple
     ``Context`` objects) to provide authentication.
 
@@ -371,6 +431,8 @@ class Context(object):
     :type port: ``integer``
     :param scheme: The scheme for accessing the service (the default is "https").
     :type scheme: "https" or "http"
+    :param verify: Enable (True) or disable (False) SSL verrification for https connections.
+    :type verify: ``Boolean``
     :param sharing: The sharing mode for the namespace (the default is "user").
     :type sharing: "global", "system", "app", or "user"
     :param owner: The owner context of the namespace (optional, the default is "None").
@@ -378,7 +440,11 @@ class Context(object):
     :param app: The app context of the namespace (optional, the default is "None").
     :type app: ``string``
     :param token: A session token. When provided, you don't need to call :meth:`login`.
-    :param username: The Splunk account username, which is used to 
+    :type token: ``string``
+    :param cookie: A session cookie. When provided, you don't need to call :meth:`login`.
+        This parameter is only supported for Splunk 6.2+.
+    :type cookie: ``string``
+    :param username: The Splunk account username, which is used to
         authenticate the Splunk instance.
     :type username: ``string``
     :param password: The password for the Splunk account.
@@ -393,11 +459,13 @@ class Context(object):
         c.login()
         # Or equivalently
         c = binding.connect(username="boris", password="natasha")
-        # Of if you already have a session token
+        # Or if you already have a session token
         c = binding.Context(token="atg232342aa34324a")
+        # Or if you already have a valid cookie
+        c = binding.Context(cookie="splunkd_8089=...")
     """
-    def __init__(self, handler=None, **kwargs):        
-        self.http = HttpLib(handler)
+    def __init__(self, handler=None, **kwargs):
+        self.http = HttpLib(handler, kwargs.get("verify", True))
         self.token = kwargs.get("token", _NoAuthenticationToken)
         if self.token is None: # In case someone explicitly passes token=None
             self.token = _NoAuthenticationToken
@@ -408,20 +476,47 @@ class Context(object):
         self.namespace = namespace(**kwargs)
         self.username = kwargs.get("username", "")
         self.password = kwargs.get("password", "")
+        self.basic = kwargs.get("basic", False)
         self.autologin = kwargs.get("autologin", False)
+
+        # Store any cookies in the self.http._cookies dict
+        if "cookie" in kwargs and kwargs['cookie'] not in [None, _NoAuthenticationToken]:
+            _parse_cookies(kwargs["cookie"], self.http._cookies)
+
+    def get_cookies(self):
+        """Gets the dictionary of cookies from the ``HttpLib`` member of this instance.
+
+        :return: Dictionary of cookies stored on the ``self.http``.
+        :rtype: ``dict``
+        """
+        return self.http._cookies
+
+    def has_cookies(self):
+        """Returns true if the ``HttpLib`` member of this instance has at least
+        one cookie stored.
+
+        :return: ``True`` if there is at least one cookie, else ``False``
+        :rtype: ``bool``
+        """
+        return len(self.get_cookies()) > 0
 
     # Shared per-context request headers
     @property
     def _auth_headers(self):
         """Headers required to authenticate a request.
 
-        Assumes your ``Context`` already has a authentication token,
-        either provided explicitly or obtained by logging into the
-        Splunk instance.
+        Assumes your ``Context`` already has a authentication token or
+        cookie, either provided explicitly or obtained by logging
+        into the Splunk instance.
 
         :returns: A list of 2-tuples containing key and value
         """
-        if self.token is _NoAuthenticationToken:
+        if self.has_cookies():
+            return [("Cookie", _make_cookie_header(list(self.get_cookies().items())))]
+        elif self.basic and (self.username and self.password):
+            token = 'Basic %s' % b64encode(("%s:%s" % (self.username, self.password)).encode('utf-8')).decode('ascii')
+            return [("Authorization", token)]
+        elif self.token is _NoAuthenticationToken:
             return []
         else:
             # Ensure the token is properly formatted
@@ -435,7 +530,7 @@ class Context(object):
         """Returns an open connection (socket) to the Splunk instance.
 
         This method is used for writing bulk events to an index or similar tasks
-        where the overhead of opening a connection multiple times would be 
+        where the overhead of opening a connection multiple times would be
         prohibitive.
 
         :returns: A socket.
@@ -455,25 +550,25 @@ class Context(object):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if self.scheme == "https":
             sock = ssl.wrap_socket(sock)
-        sock.connect((self.host, self.port))
+        sock.connect((socket.gethostbyname(self.host), self.port))
         return sock
 
     @_authentication
     @_log_duration
     def delete(self, path_segment, owner=None, app=None, sharing=None, **query):
-        """Performs a DELETE operation at the REST path segment with the given 
+        """Performs a DELETE operation at the REST path segment with the given
         namespace and query.
 
-        This method is named to match the HTTP method. ``delete`` makes at least 
-        one round trip to the server, one additional round trip for each 303 
-        status returned, and at most two additional round trips if 
+        This method is named to match the HTTP method. ``delete`` makes at least
+        one round trip to the server, one additional round trip for each 303
+        status returned, and at most two additional round trips if
         the ``autologin`` field of :func:`connect` is set to ``True``.
 
-        If *owner*, *app*, and *sharing* are omitted, this method uses the 
-        default :class:`Context` namespace. All other keyword arguments are 
+        If *owner*, *app*, and *sharing* are omitted, this method uses the
+        default :class:`Context` namespace. All other keyword arguments are
         included in the URL as query parameters.
 
-        :raises AuthenticationError: Raised when the ``Context`` object is not 
+        :raises AuthenticationError: Raised when the ``Context`` object is not
              logged in.
         :raises HTTPError: Raised when an error occurred in a GET operation from
              *path_segment*.
@@ -485,11 +580,11 @@ class Context(object):
         :type app: ``string``
         :param sharing: The sharing mode of the namespace (optional).
         :type sharing: ``string``
-        :param query: All other keyword arguments, which are used as query 
+        :param query: All other keyword arguments, which are used as query
             parameters.
         :type query: ``string``
         :return: The response from the server.
-        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``, 
+        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``,
                 and ``status``
 
         **Example**::
@@ -519,19 +614,19 @@ class Context(object):
     @_authentication
     @_log_duration
     def get(self, path_segment, owner=None, app=None, sharing=None, **query):
-        """Performs a GET operation from the REST path segment with the given 
+        """Performs a GET operation from the REST path segment with the given
         namespace and query.
 
-        This method is named to match the HTTP method. ``get`` makes at least 
-        one round trip to the server, one additional round trip for each 303 
-        status returned, and at most two additional round trips if 
+        This method is named to match the HTTP method. ``get`` makes at least
+        one round trip to the server, one additional round trip for each 303
+        status returned, and at most two additional round trips if
         the ``autologin`` field of :func:`connect` is set to ``True``.
 
-        If *owner*, *app*, and *sharing* are omitted, this method uses the 
-        default :class:`Context` namespace. All other keyword arguments are 
+        If *owner*, *app*, and *sharing* are omitted, this method uses the
+        default :class:`Context` namespace. All other keyword arguments are
         included in the URL as query parameters.
 
-        :raises AuthenticationError: Raised when the ``Context`` object is not 
+        :raises AuthenticationError: Raised when the ``Context`` object is not
              logged in.
         :raises HTTPError: Raised when an error occurred in a GET operation from
              *path_segment*.
@@ -543,11 +638,11 @@ class Context(object):
         :type app: ``string``
         :param sharing: The sharing mode of the namespace (optional).
         :type sharing: ``string``
-        :param query: All other keyword arguments, which are used as query 
+        :param query: All other keyword arguments, which are used as query
             parameters.
         :type query: ``string``
         :return: The response from the server.
-        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``, 
+        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``,
                 and ``status``
 
         **Example**::
@@ -577,16 +672,16 @@ class Context(object):
     @_authentication
     @_log_duration
     def post(self, path_segment, owner=None, app=None, sharing=None, headers=None, **query):
-        """Performs a POST operation from the REST path segment with the given 
+        """Performs a POST operation from the REST path segment with the given
         namespace and query.
 
-        This method is named to match the HTTP method. ``post`` makes at least 
-        one round trip to the server, one additional round trip for each 303 
-        status returned, and at most two additional round trips if 
+        This method is named to match the HTTP method. ``post`` makes at least
+        one round trip to the server, one additional round trip for each 303
+        status returned, and at most two additional round trips if
         the ``autologin`` field of :func:`connect` is set to ``True``.
 
-        If *owner*, *app*, and *sharing* are omitted, this method uses the 
-        default :class:`Context` namespace. All other keyword arguments are 
+        If *owner*, *app*, and *sharing* are omitted, this method uses the
+        default :class:`Context` namespace. All other keyword arguments are
         included in the URL as query parameters.
 
         Some of Splunk's endpoints, such as ``receivers/simple`` and
@@ -596,7 +691,7 @@ class Context(object):
         body, and all other keyword arguments will be passed as
         GET-style arguments in the URL.
 
-        :raises AuthenticationError: Raised when the ``Context`` object is not 
+        :raises AuthenticationError: Raised when the ``Context`` object is not
              logged in.
         :raises HTTPError: Raised when an error occurred in a GET operation from
              *path_segment*.
@@ -610,17 +705,17 @@ class Context(object):
         :type sharing: ``string``
         :param headers: List of extra HTTP headers to send (optional).
         :type headers: ``list`` of 2-tuples.
-        :param query: All other keyword arguments, which are used as query 
+        :param query: All other keyword arguments, which are used as query
             parameters.
         :type query: ``string``
         :return: The response from the server.
-        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``, 
+        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``,
                 and ``status``
 
         **Example**::
 
             c = binding.connect(...)
-            c.post('saved/searches', name='boris', 
+            c.post('saved/searches', name='boris',
                    search='search * earliest=-1m | head 1') == \\
                 {'body': ...a response reader object...,
                  'headers': [('content-length', '10455'),
@@ -635,14 +730,13 @@ class Context(object):
             c.post('nonexistant/path') # raises HTTPError
             c.logout()
             # raises AuthenticationError:
-            c.post('saved/searches', name='boris', 
+            c.post('saved/searches', name='boris',
                    search='search * earliest=-1m | head 1')
         """
         if headers is None:
             headers = []
-        
-        path = self.authority + self._abspath(path_segment, owner=owner, 
-                                              app=app, sharing=sharing)
+
+        path = self.authority + self._abspath(path_segment, owner=owner, app=app, sharing=sharing)
         logging.debug("POST request to %s (body: %s)", path, repr(query))
         all_headers = headers + self._auth_headers
         response = self.http.post(path, all_headers, **query)
@@ -653,15 +747,15 @@ class Context(object):
     def request(self, path_segment, method="GET", headers=None, body="",
                 owner=None, app=None, sharing=None):
         """Issues an arbitrary HTTP request to the REST path segment.
-        
-        This method is named to match ``httplib.request``. This function 
+
+        This method is named to match ``httplib.request``. This function
         makes a single round trip to the server.
 
-        If *owner*, *app*, and *sharing* are omitted, this method uses the 
-        default :class:`Context` namespace. All other keyword arguments are 
+        If *owner*, *app*, and *sharing* are omitted, this method uses the
+        default :class:`Context` namespace. All other keyword arguments are
         included in the URL as query parameters.
 
-        :raises AuthenticationError: Raised when the ``Context`` object is not 
+        :raises AuthenticationError: Raised when the ``Context`` object is not
              logged in.
         :raises HTTPError: Raised when an error occurred in a GET operation from
              *path_segment*.
@@ -679,11 +773,11 @@ class Context(object):
         :type app: ``string``
         :param sharing: The sharing mode of the namespace (optional).
         :type sharing: ``string``
-        :param query: All other keyword arguments, which are used as query 
+        :param query: All other keyword arguments, which are used as query
             parameters.
         :type query: ``string``
         :return: The response from the server.
-        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``, 
+        :rtype: ``dict`` with keys ``body``, ``headers``, ``reason``,
                 and ``status``
 
         **Example**::
@@ -706,12 +800,12 @@ class Context(object):
         """
         if headers is None:
             headers = []
-        
+
         path = self.authority \
-            + self._abspath(path_segment, owner=owner, 
+            + self._abspath(path_segment, owner=owner,
                             app=app, sharing=sharing)
         all_headers = headers + self._auth_headers
-        logging.debug("%s request to %s (headers: %s, body: %s)", 
+        logging.debug("%s request to %s (headers: %s, body: %s)",
                       method, path, str(all_headers), repr(body))
         response = self.http.request(path,
                                      {'method': method,
@@ -723,10 +817,10 @@ class Context(object):
         """Logs into the Splunk instance referred to by the :class:`Context`
         object.
 
-        Unless a ``Context`` is created with an explicit authentication token 
+        Unless a ``Context`` is created with an explicit authentication token
         (probably obtained by logging in from a different ``Context`` object)
-        you must call :meth:`login` before you can issue requests. 
-        The authentication token obtained from the server is stored in the 
+        you must call :meth:`login` before you can issue requests.
+        The authentication token obtained from the server is stored in the
         ``token`` field of the ``Context`` object.
 
         :raises AuthenticationError: Raised when login fails.
@@ -738,17 +832,34 @@ class Context(object):
             c = binding.Context(...).login()
             # Then issue requests...
         """
+
+        if self.has_cookies() and \
+                (not self.username and not self.password):
+            # If we were passed session cookie(s), but no username or
+            # password, then login is a nop, since we're automatically
+            # logged in.
+            return
+
         if self.token is not _NoAuthenticationToken and \
                 (not self.username and not self.password):
             # If we were passed a session token, but no username or
             # password, then login is a nop, since we're automatically
             # logged in.
             return
+
+        if self.basic and (self.username and self.password):
+            # Basic auth mode requested, so this method is a nop as long
+            # as credentials were passed in.
+            return
+
+        # Only try to get a token and updated cookie if username & password are specified
         try:
             response = self.http.post(
                 self.authority + self._abspath("/services/auth/login"),
-                username=self.username, 
-                password=self.password)
+                username=self.username,
+                password=self.password,
+                cookie="1") # In Splunk 6.2+, passing "cookie=1" will return the "set-cookie" header
+
             body = response.body.read()
             session = XML(body).findtext("./sessionKey")
             self.token = "Splunk %s" % session
@@ -760,11 +871,12 @@ class Context(object):
                 raise
 
     def logout(self):
-        """Forgets the current session token."""
+        """Forgets the current session token, and cookies."""
         self.token = _NoAuthenticationToken
+        self.http._cookies = {}
         return self
 
-    def _abspath(self, path_segment, 
+    def _abspath(self, path_segment,
                 owner=None, app=None, sharing=None):
         """Qualifies *path_segment* into an absolute path for a URL.
 
@@ -780,8 +892,8 @@ class Context(object):
 
         :param path_segment: A relative or absolute URL path segment.
         :type path_segment: ``string``
-        :param owner, app, sharing: Components of a namespace (defaults 
-                                    to the ``Context``'s namespace if all 
+        :param owner, app, sharing: Components of a namespace (defaults
+                                    to the ``Context``'s namespace if all
                                     three are omitted)
         :type owner, app, sharing: ``string``
         :return: A ``UrlEncoded`` (a subclass of ``str``).
@@ -825,6 +937,7 @@ class Context(object):
                           skip_encode=skip_encode)
         return path
 
+
 def connect(**kwargs):
     """This function returns an authenticated :class:`Context` object.
 
@@ -844,15 +957,18 @@ def connect(**kwargs):
     :type app: ``string``
     :param sharing: The sharing mode for the namespace (the default is "user").
     :type sharing: "global", "system", "app", or "user"
-    :param token: The current session token (optional). Session tokens can be 
+    :param token: The current session token (optional). Session tokens can be
         shared across multiple service instances.
     :type token: ``string``
-    :param username: The Splunk account username, which is used to 
+    :param cookie: A session cookie. When provided, you don't need to call :meth:`login`.
+        This parameter is only supported for Splunk 6.2+.
+    :type cookie: ``string``
+    :param username: The Splunk account username, which is used to
         authenticate the Splunk instance.
     :type username: ``string``
     :param password: The password for the Splunk account.
     :type password: ``string``
-    :param autologin: When ``True``, automatically tries to log in again if the 
+    :param autologin: When ``True``, automatically tries to log in again if the
         session terminates.
     :type autologin: ``Boolean``
     :return: An initialized :class:`Context` instance.
@@ -868,7 +984,7 @@ def connect(**kwargs):
     return c
 
 # Note: the error response schema supports multiple messages but we only
-# return the first, although we do return the body so that an exception 
+# return the first, although we do return the body so that an exception
 # handler that wants to read multiple messages can do so.
 class HTTPError(Exception):
     """This exception is raised for HTTP responses that return an error."""
@@ -876,10 +992,13 @@ class HTTPError(Exception):
         status = response.status
         reason = response.reason
         body = response.body.read()
-        detail = XML(body).findtext("./messages/msg")
+        try:
+            detail = XML(body).findtext("./messages/msg")
+        except ParseError as err:
+            detail = body
         message = "HTTP %d %s%s" % (
             status, reason, "" if detail is None else " -- %s" % detail)
-        Exception.__init__(self, _message or message) 
+        Exception.__init__(self, _message or message)
         self.status = status
         self.reason = reason
         self.headers = response.headers
@@ -896,8 +1015,8 @@ class AuthenticationError(HTTPError):
     def __init__(self, message, cause):
         # Put the body back in the response so that HTTPError's constructor can
         # read it again.
-        cause._response.body = StringIO(cause.body)
-        
+        cause._response.body = BytesIO(cause.body)
+
         HTTPError.__init__(self, cause._response, message)
 
 #
@@ -922,39 +1041,40 @@ class AuthenticationError(HTTPError):
 #
 
 # Encode the given kwargs as a query string. This wrapper will also _encode
-# a list value as a sequence of assignemnts to the corresponding arg name, 
+# a list value as a sequence of assignemnts to the corresponding arg name,
 # for example an argument such as 'foo=[1,2,3]' will be encoded as
-# 'foo=1&foo=2&foo=3'. 
+# 'foo=1&foo=2&foo=3'.
 def _encode(**kwargs):
     items = []
-    for key, value in kwargs.iteritems():
+    for key, value in six.iteritems(kwargs):
         if isinstance(value, list):
             items.extend([(key, item) for item in value])
         else:
             items.append((key, value))
-    return urllib.urlencode(items)
+    return urllib.parse.urlencode(items)
 
 # Crack the given url into (scheme, host, port, path)
 def _spliturl(url):
-    scheme, opaque = urllib.splittype(url)
-    netloc, path = urllib.splithost(opaque)
-    host, port = urllib.splitport(netloc)
+    parsed_url = urllib.parse.urlparse(url)
+    host = parsed_url.hostname
+    port = parsed_url.port
+    path = '?'.join((parsed_url.path, parsed_url.query)) if parsed_url.query else parsed_url.path
     # Strip brackets if its an IPv6 address
     if host.startswith('[') and host.endswith(']'): host = host[1:-1]
     if port is None: port = DEFAULT_PORT
-    return scheme, host, port, path
+    return parsed_url.scheme, host, port, path
 
 # Given an HTTP request handler, this wrapper objects provides a related
 # family of convenience methods built using that handler.
 class HttpLib(object):
     """A set of convenient methods for making HTTP calls.
 
-    ``HttpLib`` provides a general :meth:`request` method, and :meth:`delete`, 
+    ``HttpLib`` provides a general :meth:`request` method, and :meth:`delete`,
     :meth:`post`, and :meth:`get` methods for the three HTTP methods that Splunk
     uses.
 
     By default, ``HttpLib`` uses Python's built-in ``httplib`` library,
-    but you can replace it by passing your own handling function to the 
+    but you can replace it by passing your own handling function to the
     constructor for ``HttpLib``.
 
     The handling function should have the type:
@@ -968,7 +1088,7 @@ class HttpLib(object):
 
         - headers: A list of pairs specifying the HTTP headers (for example: ``[('key': value), ...]``).
 
-        - body: A string containing the body to send with the request (this string 
+        - body: A string containing the body to send with the request (this string
           should default to '').
 
     and ``response_dict`` is a dictionary with the following keys:
@@ -984,22 +1104,25 @@ class HttpLib(object):
 
     The response dictionary is returned directly by ``HttpLib``'s methods with
     no further processing. By default, ``HttpLib`` calls the :func:`handler` function
-    to get a handler function. 
+    to get a handler function.
+
+    If using the default handler, SSL verification can be disabled by passing verify=False.
     """
-    def __init__(self, custom_handler=None):
-        self.handler = handler() if custom_handler is None else custom_handler
+    def __init__(self, custom_handler=None, verify=True):
+        self.handler = handler(verify=verify) if custom_handler is None else custom_handler
+        self._cookies = {}
 
     def delete(self, url, headers=None, **kwargs):
         """Sends a DELETE request to a URL.
 
         :param url: The URL.
         :type url: ``string``
-        :param headers: A list of pairs specifying the headers for the HTTP 
+        :param headers: A list of pairs specifying the headers for the HTTP
             response (for example, ``[('Content-Type': 'text/cthulhu'), ('Token': 'boris')]``).
         :type headers: ``list``
         :param kwargs: Additional keyword arguments (optional). These arguments
-            are interpreted as the query part of the URL. The order of keyword 
-            arguments is not preserved in the request, but the keywords and 
+            are interpreted as the query part of the URL. The order of keyword
+            arguments is not preserved in the request, but the keywords and
             their arguments will be URL encoded.
         :type kwargs: ``dict``
         :returns: A dictionary describing the response (see :class:`HttpLib` for
@@ -1007,7 +1130,7 @@ class HttpLib(object):
         :rtype: ``dict``
         """
         if headers is None: headers = []
-        if kwargs: 
+        if kwargs:
             # url is already a UrlEncoded. We have to manually declare
             # the query to be encoded or it will get automatically URL
             # encoded by being appended to url.
@@ -1019,16 +1142,16 @@ class HttpLib(object):
         return self.request(url, message)
 
     def get(self, url, headers=None, **kwargs):
-        """Sends a GET request to a URL. 
+        """Sends a GET request to a URL.
 
         :param url: The URL.
         :type url: ``string``
-        :param headers: A list of pairs specifying the headers for the HTTP 
+        :param headers: A list of pairs specifying the headers for the HTTP
             response (for example, ``[('Content-Type': 'text/cthulhu'), ('Token': 'boris')]``).
         :type headers: ``list``
         :param kwargs: Additional keyword arguments (optional). These arguments
-            are interpreted as the query part of the URL. The order of keyword 
-            arguments is not preserved in the request, but the keywords and 
+            are interpreted as the query part of the URL. The order of keyword
+            arguments is not preserved in the request, but the keywords and
             their arguments will be URL encoded.
         :type kwargs: ``dict``
         :returns: A dictionary describing the response (see :class:`HttpLib` for
@@ -1036,7 +1159,7 @@ class HttpLib(object):
         :rtype: ``dict``
         """
         if headers is None: headers = []
-        if kwargs: 
+        if kwargs:
             # url is already a UrlEncoded. We have to manually declare
             # the query to be encoded or it will get automatically URL
             # encoded by being appended to url.
@@ -1048,13 +1171,13 @@ class HttpLib(object):
 
         :param url: The URL.
         :type url: ``string``
-        :param headers: A list of pairs specifying the headers for the HTTP 
+        :param headers: A list of pairs specifying the headers for the HTTP
             response (for example, ``[('Content-Type': 'text/cthulhu'), ('Token': 'boris')]``).
         :type headers: ``list``
-        :param kwargs: Additional keyword arguments (optional). If the argument 
-            is ``body``, the value is used as the body for the request, and the 
-            keywords and their arguments will be URL encoded. If there is no 
-            ``body`` keyword argument, all the keyword arguments are encoded 
+        :param kwargs: Additional keyword arguments (optional). If the argument
+            is ``body``, the value is used as the body for the request, and the
+            keywords and their arguments will be URL encoded. If there is no
+            ``body`` keyword argument, all the keyword arguments are encoded
             into the body of the request in the format ``x-www-form-urlencoded``.
         :type kwargs: ``dict``
         :returns: A dictionary describing the response (see :class:`HttpLib` for
@@ -1062,15 +1185,21 @@ class HttpLib(object):
         :rtype: ``dict``
         """
         if headers is None: headers = []
-        headers.append(("Content-Type", "application/x-www-form-urlencoded")),
+
         # We handle GET-style arguments and an unstructured body. This is here
         # to support the receivers/stream endpoint.
         if 'body' in kwargs:
+            # We only use application/x-www-form-urlencoded if there is no other
+            # Content-Type header present. This can happen in cases where we 
+            # send requests as application/json, e.g. for KV Store.
+            if len([x for x in headers if x[0].lower() == "content-type"]) == 0:
+                headers.append(("Content-Type", "application/x-www-form-urlencoded"))
+
             body = kwargs.pop('body')
             if len(kwargs) > 0:
                 url = url + UrlEncoded('?' + _encode(**kwargs), skip_encode=True)
         else:
-            body = _encode(**kwargs)
+            body = _encode(**kwargs).encode('utf-8')
         message = {
             'method': "POST",
             'headers': headers,
@@ -1083,8 +1212,8 @@ class HttpLib(object):
 
         :param url: The URL.
         :type url: ``string``
-        :param message: A dictionary with the format as described in 
-            :class:`HttpLib`. 
+        :param message: A dictionary with the format as described in
+            :class:`HttpLib`.
         :type message: ``dict``
         :param kwargs: Additional keyword arguments (optional). These arguments
             are passed unchanged to the handler.
@@ -1096,23 +1225,37 @@ class HttpLib(object):
         response = self.handler(url, message, **kwargs)
         response = record(response)
         if 400 <= response.status:
-            raise HTTPError(response) 
+            raise HTTPError(response)
+
+        # Update the cookie with any HTTP request
+        # Initially, assume list of 2-tuples
+        key_value_tuples = response.headers
+        # If response.headers is a dict, get the key-value pairs as 2-tuples
+        # this is the case when using urllib2
+        if isinstance(response.headers, dict):
+            key_value_tuples = list(response.headers.items())
+        for key, value in key_value_tuples:
+            if key.lower() == "set-cookie":
+                _parse_cookies(value, self._cookies)
+
         return response
 
+
 # Converts an httplib response into a file-like object.
-class ResponseReader(object):
+class ResponseReader(io.RawIOBase):
     """This class provides a file-like interface for :class:`httplib` responses.
 
     The ``ResponseReader`` class is intended to be a layer to unify the different
-    types of HTTP libraries used with this SDK. This class also provides a 
+    types of HTTP libraries used with this SDK. This class also provides a
     preview of the stream and a few useful predicates.
     """
     # For testing, you can use a StringIO as the argument to
     # ``ResponseReader`` instead of an ``httplib.HTTPResponse``. It
     # will work equally well.
-    def __init__(self, response):
+    def __init__(self, response, connection=None):
         self._response = response
-        self._buffer = ''
+        self._connection = connection
+        self._buffer = b''
 
     def __str__(self):
         return self.read()
@@ -1120,15 +1263,15 @@ class ResponseReader(object):
     @property
     def empty(self):
         """Indicates whether there is any more data in the response."""
-        return self.peek(1) == ""
+        return self.peek(1) == b""
 
     def peek(self, size):
-        """Nondestructively retrieves a given number of characters. 
+        """Nondestructively retrieves a given number of characters.
 
-        The next :meth:`read` operation behaves as though this method was never 
-        called. 
+        The next :meth:`read` operation behaves as though this method was never
+        called.
 
-        :param size: The number of characters to retrieve. 
+        :param size: The number of characters to retrieve.
         :type size: ``integer``
         """
         c = self.read(size)
@@ -1137,24 +1280,44 @@ class ResponseReader(object):
 
     def close(self):
         """Closes this response."""
+        if _connection:
+            _connection.close()
         self._response.close()
 
     def read(self, size = None):
         """Reads a given number of characters from the response.
-        
+
         :param size: The number of characters to read, or "None" to read the
             entire response.
         :type size: ``integer`` or "None"
 
         """
         r = self._buffer
-        self._buffer = ''
+        self._buffer = b''
         if size is not None:
             size -= len(r)
         r = r + self._response.read(size)
         return r
 
-def handler(key_file=None, cert_file=None, timeout=None):
+    def readable(self):
+        """ Indicates that the response reader is readable."""
+        return True
+
+    def readinto(self, byte_array):
+        """ Read data into a byte array, upto the size of the byte array.
+
+        :param byte_array: A byte array/memory view to pour bytes into.
+        :type byte_array: ``bytearray`` or ``memoryview``
+
+        """
+        max_size = len(byte_array)
+        data = self.read(max_size)
+        bytes_read = len(data)
+        byte_array[:bytes_read] = data
+        return bytes_read
+
+
+def handler(key_file=None, cert_file=None, timeout=None, verify=True):
     """This class returns an instance of the default HTTP request handler using
     the values you provide.
 
@@ -1164,46 +1327,56 @@ def handler(key_file=None, cert_file=None, timeout=None):
     :type cert_file: ``string``
     :param `timeout`: The request time-out period, in seconds (optional).
     :type timeout: ``integer`` or "None"
+    :param `verify`: Set to False to disable SSL verification on https connections.
+    :type verify: ``Boolean``
     """
 
     def connect(scheme, host, port):
         kwargs = {}
         if timeout is not None: kwargs['timeout'] = timeout
         if scheme == "http":
-            return httplib.HTTPConnection(host, port, **kwargs)
+            return six.moves.http_client.HTTPConnection(host, port, **kwargs)
         if scheme == "https":
             if key_file is not None: kwargs['key_file'] = key_file
             if cert_file is not None: kwargs['cert_file'] = cert_file
-            return httplib.HTTPSConnection(host, port, **kwargs)
+
+            # If running Python 2.7.9+, disable SSL certificate validation
+            if (sys.version_info >= (2,7,9) and key_file is None and cert_file is None) or not verify:
+                kwargs['context'] = ssl._create_unverified_context()
+            return six.moves.http_client.HTTPSConnection(host, port, **kwargs)
         raise ValueError("unsupported scheme: %s" % scheme)
 
     def request(url, message, **kwargs):
         scheme, host, port, path = _spliturl(url)
         body = message.get("body", "")
-        head = { 
+        head = {
             "Content-Length": str(len(body)),
             "Host": host,
-            "User-Agent": "splunk-sdk-python/0.1",
+            "User-Agent": "splunk-sdk-python/1.6.5",
             "Accept": "*/*",
+            "Connection": "Close",
         } # defaults
-        for key, value in message["headers"]: 
+        for key, value in message["headers"]:
             head[key] = value
         method = message.get("method", "GET")
 
         connection = connect(scheme, host, port)
+        is_keepalive = False
         try:
             connection.request(method, path, body, head)
-            if timeout is not None: 
+            if timeout is not None:
                 connection.sock.settimeout(timeout)
             response = connection.getresponse()
+            is_keepalive = "keep-alive" in response.getheader("connection", default="close").lower()
         finally:
-            connection.close()
+            if not is_keepalive:
+                connection.close()
 
         return {
-            "status": response.status, 
+            "status": response.status,
             "reason": response.reason,
             "headers": response.getheaders(),
-            "body": ResponseReader(response),
+            "body": ResponseReader(response, connection if is_keepalive else None),
         }
 
     return request

@@ -4,6 +4,9 @@ set DEPOY_PATH=%DEPOY_PATH:\=/%
 set DEPOY_PATH=%DEPOY_PATH:c:=/c%
 IF %DEPOY_PATH:~-1%==/ SET DEPOY_PATH=%DEPOY_PATH:~0,-1%
 
+rmdir "%~dp0test_app\local" /s /q	
+rmdir "%~dp0..\local" /s /q
+
 docker rm -fv workato_splunk
 docker rm -fv workato_test
 

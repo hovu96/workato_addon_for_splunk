@@ -1,3 +1,4 @@
+import fix_path
 import os
 import json
 import urllib2

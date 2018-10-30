@@ -1,4 +1,4 @@
-# Copyright 2011-2012 Splunk, Inc.
+# Copyright 2011-2015 Splunk, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"): you may
 # not use this file except in compliance with the License. You may obtain
@@ -12,15 +12,15 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-"""The **splunklib.results** module provides a streaming XML reader for Splunk 
+"""The **splunklib.results** module provides a streaming XML reader for Splunk
 search results.
 
-Splunk search results can be returned in a variety of formats including XML, 
-JSON, and CSV. To make it easier to stream search results in XML format, they 
-are returned as a stream of XML *fragments*, not as a single XML document. This 
-module supports incrementally reading one result record at a time from such a 
+Splunk search results can be returned in a variety of formats including XML,
+JSON, and CSV. To make it easier to stream search results in XML format, they
+are returned as a stream of XML *fragments*, not as a single XML document. This
+module supports incrementally reading one result record at a time from such a
 result stream. This module also provides a friendly iterator-based interface for
-accessing search results while avoiding buffering the result set, which can be 
+accessing search results while avoiding buffering the result set, which can be
 very large.
 
 To use the reader, instantiate :class:`ResultsReader` on a search result stream
@@ -32,20 +32,25 @@ as follows:::
     print "Results are a preview: %s" % reader.is_preview
 """
 
+from __future__ import absolute_import
+
+from io import BytesIO
+
+from splunklib import six
 try:
     import xml.etree.cElementTree as et
 except:
     import xml.etree.ElementTree as et
 
 try:
-    from collections import OrderedDict
-except:
-    from ordereddict import OrderedDict
+    from collections import OrderedDict  # must be python 2.7
+except ImportError:
+    from .ordereddict import OrderedDict
 
 try:
-    from cStringIO import StringIO
+    from splunklib.six.moves import cStringIO as StringIO
 except:
-    from StringIO import StringIO
+    from splunklib.six import StringIO
 
 __all__ = [
     "ResultsReader",
@@ -65,13 +70,13 @@ class Message(object):
     def __init__(self, type_, message):
         self.type = type_
         self.message = message
-    
+
     def __repr__(self):
         return "%s: %s" % (self.type, self.message)
-    
+
     def __eq__(self, other):
         return (self.type, self.message) == (other.type, other.message)
-    
+
     def __hash__(self):
         return hash((self.type, self.message))
 
@@ -95,13 +100,13 @@ class _ConcatenatedStream(object):
 
         If *n* is ``None``, return all available characters.
         """
-        response = ""
+        response = b""
         while len(self.streams) > 0 and (n is None or n > 0):
             txt = self.streams[0].read(n)
             response += txt
             if n is not None:
                 n -= len(txt)
-            if n > 0 or n is None:
+            if n is None or n > 0:
                 del self.streams[0]
         return response
 
@@ -126,17 +131,17 @@ class _XMLDTDFilter(object):
 
         If *n* is ``None``, return all available characters.
         """
-        response = ""
+        response = b""
         while n is None or n > 0:
             c = self.stream.read(1)
-            if c == "":
+            if c == b"":
                 break
-            elif c == "<":
+            elif c == b"<":
                 c += self.stream.read(1)
-                if c == "<?":
+                if c == b"<?":
                     while True:
                         q = self.stream.read(1)
-                        if q == ">":
+                        if q == b">":
                             break
                 else:
                     response += c
@@ -149,18 +154,18 @@ class _XMLDTDFilter(object):
         return response
 
 class ResultsReader(object):
-    """This class returns dictionaries and Splunk messages from an XML results 
+    """This class returns dictionaries and Splunk messages from an XML results
     stream.
 
-    ``ResultsReader`` is iterable, and returns a ``dict`` for results, or a 
-    :class:`Message` object for Splunk messages. This class has one field, 
-    ``is_preview``, which is ``True`` when the results are a preview from a 
+    ``ResultsReader`` is iterable, and returns a ``dict`` for results, or a
+    :class:`Message` object for Splunk messages. This class has one field,
+    ``is_preview``, which is ``True`` when the results are a preview from a
     running search, or ``False`` when the results are from a completed search.
 
-    This function has no network activity other than what is implicit in the 
+    This function has no network activity other than what is implicit in the
     stream it operates on.
 
-    :param `stream`: The stream to read from (any object that supports 
+    :param `stream`: The stream to read from (any object that supports
         ``.read()``).
 
     **Example**::
@@ -194,7 +199,7 @@ class ResultsReader(object):
         # we remove all the DTD definitions inline, then wrap the
         # fragments in a fiction <doc> element to make the parser happy.
         stream = _XMLDTDFilter(stream)
-        stream = _ConcatenatedStream(StringIO("<doc>"), stream, StringIO("</doc>"))
+        stream = _ConcatenatedStream(BytesIO(b"<doc>"), stream, BytesIO(b"</doc>"))
         self.is_preview = None
         self._gen = self._parse_results(stream)
 
@@ -202,7 +207,9 @@ class ResultsReader(object):
         return self
 
     def next(self):
-        return self._gen.next()
+        return next(self._gen)
+
+    __next__ = next
 
     def _parse_results(self, stream):
         """Parse results and messages out of *stream*."""
@@ -224,7 +231,7 @@ class ResultsReader(object):
                         yield result
                         result = None
                         elem.clear()
-    
+
                 elif elem.tag == 'field' and result is not None:
                     # We need the 'result is not None' check because
                     # 'field' is also the element name in the <meta>
@@ -233,7 +240,7 @@ class ResultsReader(object):
                     if event == 'start':
                         values = []
                     elif event == 'end':
-                        field_name = elem.attrib['k'].encode('utf8')
+                        field_name = elem.attrib['k']
                         if len(values) == 1:
                             result[field_name] = values[0]
                         else:
@@ -244,18 +251,38 @@ class ResultsReader(object):
                         # arbitrarily large memory intead of
                         # streaming.
                         elem.clear()
-    
+
                 elif elem.tag in ('text', 'v') and event == 'end':
-                    values.append(elem.text.encode('utf8'))
+                    try:
+                        text = "".join(elem.itertext())
+                    except AttributeError:
+                        # Assume we're running in Python < 2.7, before itertext() was added
+                        # So we'll define it here
+
+                        def __itertext(self):
+                          tag = self.tag
+                          if not isinstance(tag, six.string_types) and tag is not None:
+                              return
+                          if self.text:
+                              yield self.text
+                          for e in self:
+                              for s in __itertext(e):
+                                  yield s
+                              if e.tail:
+                                  yield e.tail
+
+                        text = "".join(__itertext(elem))
+                    values.append(text)
                     elem.clear()
-    
+
                 elif elem.tag == 'msg':
                     if event == 'start':
                         msg_type = elem.attrib['type']
                     elif event == 'end':
-                        yield Message(msg_type, elem.text.encode('utf8'))
+                        text = elem.text if elem.text is not None else ""
+                        yield Message(msg_type, text)
                         elem.clear()
-        except et.ParseError as pe:
+        except SyntaxError as pe:
             # This is here to handle the same incorrect return from
             # splunk that is described in __init__.
             if 'no element found' in pe.msg:

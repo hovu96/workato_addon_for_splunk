@@ -1,3 +1,4 @@
+import fix_path
 import json
 from .base_handler import BaseRestHandler
 from .utils import workato_app_name

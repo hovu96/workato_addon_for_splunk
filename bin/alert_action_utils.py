@@ -1,4 +1,4 @@
-
+import fix_path
 
 callback_search_param = 'action.workato.param.callback_urls'
 workato_alert_action = 'action.workato'

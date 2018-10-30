@@ -1,5 +1,6 @@
-import json
+import fix_path
 from .base_handler import BaseRestHandler
+import json
 from .utils import workato_app_name
 
 class VersionHandler(BaseRestHandler):

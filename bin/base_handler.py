@@ -1,3 +1,4 @@
+import fix_path
 from splunk import auth, search
 import splunk.rest
 import logging as logger
