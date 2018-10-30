@@ -11,10 +11,11 @@ from splunklib import client, results as results_lib
 splunk_host = sys.argv[1]
 splunk_port = sys.argv[2]
 test_host = sys.argv[3]
+splunk_password = sys.argv[4]
 
 s = client.Service(
     username="admin",
-    password="admin",
+    password=splunk_password,
     port=splunk_port,
     scheme="https",
     host=splunk_host)
@@ -64,7 +65,7 @@ def call_json_service(url, method, payload, authorization_header):
 def call_workato_addon(name, method, payload):
     url = "https://%s:%s/services/workato/%s" % (
         splunk_host, splunk_port, name)
-    auth = 'Basic %s' % base64.b64encode("admin:admin")
+    auth = 'Basic %s' % base64.b64encode("admin:%s"%splunk_password)
     return call_json_service(url, method, payload, auth)
 
 print "checking version ..."
