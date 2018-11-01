@@ -24,7 +24,10 @@ fi
 # Update app config
 sed -i -- "s/^build\s*=.*/build = $BUILD_NUMBER/g" ../default/app.conf
 sed -i -- "s/^version\s*=.*/version = $VERSION/g" ../default/app.conf
+echo "increased build number to $BUILD_NUMBER"
 
 cd ../..
 export COPYFILE_DISABLE=true
 tar -zcf workato_addon_for_splunk/deploy/workato_addon_for_splunk.spl --exclude='workato_addon_for_splunk/private' --exclude='workato_addon_for_splunk/deploy' --exclude='workato_addon_for_splunk/.git' --exclude='workato_addon_for_splunk/.git' --exclude='workato_addon_for_splunk/.gitignore' --exclude='README.md' --exclude='.[^/]*' -X workato_addon_for_splunk/.gitignore workato_addon_for_splunk
+
+echo "created workato_addon_for_splunk.spl"
