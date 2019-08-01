@@ -1,12 +1,18 @@
 import fix_path
-import sys, os, datetime, json, urllib2
+import sys
+import os
+import datetime
+import json
+import urllib2
 import splunklib.client as client
 from splunklib.binding import _spliturl as spliturl
 from splunklib.binding import namespace as namespace
-import gzip, csv
+import gzip
+import csv
 from alert_action_utils import iterate_callbacks_from_string
 
-def call_workato(payload):
+
+def call_workato(payload, allow_insecure_callback):
 
     config = payload.get('configuration')
     callback_urls = config.get('callback_urls')
@@ -15,14 +21,18 @@ def call_workato(payload):
     callback_urls = list(iterate_callbacks_from_string(callback_urls))
 
     sid = payload.get('sid')
-    def log(level,msg):
-        print >> sys.stderr, "%s sid=\"%s\" %s" % (level,sid,msg)
+
+    def log(level, msg):
+        print >> sys.stderr, "%s sid=\"%s\" %s" % (level, sid, msg)
+
     def log_info(msg):
-        log("INFO",msg)
+        log("INFO", msg)
+
     def log_debug(msg):
-        log("DEBUG",msg)
+        log("DEBUG", msg)
+
     def log_error(msg):
-        log("ERROR",msg)
+        log("ERROR", msg)
 
     alert_count = 0
     callback_url_count = len(callback_urls)
@@ -37,28 +47,37 @@ def call_workato(payload):
             payload = {}
             for name, value in row.iteritems():
                 if not name.startswith('__mv'):
-                    payload[name]=value
+                    payload[name] = value
             for callback_url in callback_urls:
                 callback_invocation_attempts += 1
                 try:
-                	if not callback_url.startswith("https://") and not os.getenv("WORKATO_INTEGRATION_TEST")=="1":
-                		log_error("insecure callback url: \"%s\"" % callback_url)
-                	else:
-	                    req = urllib2.Request(callback_url, json.dumps(payload), {"Content-Type": "application/json"})
-	                    res = urllib2.urlopen(req)
-	                    body_bytes = len(str(res.read()))
-	                    log_info("callback=\"%s\" status=%d body_length=\"%d\"" % (callback_url, res.code, body_bytes))
+                    if not callback_url.startswith("https://") and not allow_insecure_callback:
+                        log_error("insecure callback url: \"%s\"" %
+                                  callback_url)
+                    else:
+                        req = urllib2.Request(callback_url, json.dumps(payload), {
+                                              "Content-Type": "application/json"})
+                        res = urllib2.urlopen(req)
+                        body_bytes = len(str(res.read()))
+                        log_info("callback=\"%s\" status=%d body_length=\"%d\"" % (
+                            callback_url, res.code, body_bytes))
                 except urllib2.HTTPError, e:
                     callback_invocation_errors += 1
-                    log_error("callback=\"%s\" error=\"%s\"" % (callback_url, str(e)))
+                    log_error("callback=\"%s\" error=\"%s\"" %
+                              (callback_url, str(e)))
 
-    log_info("alert_count=%d callback_url_count=%d callback_invocation_attempts=%d callback_invocation_errors=%d" % (alert_count, callback_url_count, callback_invocation_attempts, callback_invocation_errors))
+    log_info("alert_count=%d callback_url_count=%d callback_invocation_attempts=%d callback_invocation_errors=%d" % (
+        alert_count, callback_url_count, callback_invocation_attempts, callback_invocation_errors))
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--execute":
         payload = sys.stdin.read()
         payload = json.loads(payload)
-        call_workato(payload)
+        allow_insecure_callback = False
+        if len(sys.argv) > 2 and sys.argv[2] == "--allow_insecure_callback":
+            allow_insecure_callback = True
+        call_workato(payload, allow_insecure_callback)
     else:
         print >> sys.stderr, "FATAL Unsupported execution mode (expected --execute flag)"
         sys.exit(1)
