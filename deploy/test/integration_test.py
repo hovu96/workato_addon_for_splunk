@@ -1,3 +1,4 @@
+from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 import sys
 import os
 import urllib2
@@ -38,6 +39,7 @@ class Request(urllib2.Request):
     def get_method(self):
         return self.__method
 
+
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
@@ -65,8 +67,9 @@ def call_json_service(url, method, payload, authorization_header):
 def call_workato_addon(name, method, payload):
     url = "https://%s:%s/services/workato/%s" % (
         splunk_host, splunk_port, name)
-    auth = 'Basic %s' % base64.b64encode("admin:%s"%splunk_password)
+    auth = 'Basic %s' % base64.b64encode("admin:%s" % splunk_password)
     return call_json_service(url, method, payload, auth)
+
 
 print "checking version ..."
 version = call_workato_addon("version", "GET", None)
@@ -98,6 +101,7 @@ def run_splunk_search(query):
             events.append(result)
     return events
 
+
 send_event_to_splunk({
     "payload": "test=1",
 })
@@ -117,7 +121,6 @@ if len(results) != 1:
     raise Exception("unexpected search result")
 
 print "starting server  ..."
-from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 received_events = {}
 just_received_request = False
 
@@ -135,6 +138,8 @@ class MyCallbackHandler(BaseHTTPRequestHandler):
             received_events[self.path].append(alert)
         self.end_headers()
         self.wfile.write("")
+
+
 server_address = ('', 80)
 server = HTTPServer(server_address, MyCallbackHandler)
 server.timeout = 1
@@ -162,6 +167,7 @@ def unsubscribe_alert(name, payload, callback_path):
     del received_events[callback_path]
     return call_workato_addon("alerts", "DELETE", payload)
 
+
 print "subscribing realtime alert ..."
 unsubscribe_data, subscription_key = subscribe_alert('realtime_alert')
 
@@ -174,6 +180,22 @@ while len(received_events[subscription_key]) == 0:
 
 print "unsubscribing realtime alert ..."
 unsubscribe_alert('realtime_alert', unsubscribe_data, subscription_key)
+
+handle_server_requests()
+
+print "subscribing empty events ..."
+unsubscribe_data, subscription_key = subscribe_alert('no_results')
+
+print "Waiting for empty events ..."
+while len(received_events[subscription_key]) == 0:
+    handle_server_requests()
+empty_alerts = received_events[subscription_key][0]
+if len(empty_alerts)>0:
+    print "empty_alerts: %s" % empty_alerts
+    raise Exception("expected no result")
+
+print "unsubscribing empty events ..."
+unsubscribe_alert('no_results', unsubscribe_data, subscription_key)
 
 handle_server_requests()
 
@@ -205,6 +227,7 @@ def unsubscribe_service_alert(payload, callback_path):
     del received_events[callback_path]
     return call_workato_addon("servicealerts", "DELETE", payload)
 
+
 print "subscribing service alert ..."
 unsubscribe_data, subscription_key = subscribe_service_alert()
 
@@ -230,7 +253,10 @@ print "waiting for service alert ..."
 while len(received_events[subscription_key]) == 0:
     server.handle_request()
 service_alert = received_events[subscription_key][0]
-# print service_alert
+if not 'severity' in service_alert:
+    raise Exception("missing severity")
+if service_alert['severity'] != 'severity':
+    raise Exception("unexpected severity: %s" % service_alert['severity'])
 
 handle_server_requests()
 
@@ -280,6 +306,7 @@ def has_callback_path(saved_search, callback_path):
             return True
     return False
 
+
 print "subscribing service alert (#1) ..."
 unsubscribe_data_1, subscription_1_callback_path = subscribe_service_alert()
 
@@ -328,6 +355,7 @@ def has_service_alert(callback_path, event_id):
             return True
     return False
 
+
 print "waiting for service alerts ..."
 while not has_service_alert(subscription_1_callback_path, "2"):
     server.handle_request()
@@ -375,6 +403,7 @@ def run_saved_search(name):
     return call_workato_addon("savedsearches", "POST", {
         "search_name": name
     })
+
 
 print "getting saved searches ..."
 saved_searches = list_saved_search()
