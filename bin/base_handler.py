@@ -12,6 +12,9 @@ import base64
 import random
 from .utils import Request, call_json_service
 
+import os
+app_name = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
+
 class BaseRestHandler(splunk.rest.BaseRestHandler):
     def create_service(self):
         management_url = "https://"+self.request["headers"]["host"]+"/"
@@ -23,7 +26,8 @@ class BaseRestHandler(splunk.rest.BaseRestHandler):
             password=password,
             port=port,
             scheme=scheme,
-            host=host)
+            host=host,
+            app=app_name)
         s.login()
         return s
     def call_json_service(self, method, path, payload):
