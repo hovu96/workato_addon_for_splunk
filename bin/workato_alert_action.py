@@ -3,7 +3,9 @@ import sys
 import os
 import datetime
 import json
-import urllib2
+import six.moves.urllib.request
+import six.moves.urllib.error
+import six.moves.urllib.parse
 import splunklib.client as client
 from splunklib.binding import _spliturl as spliturl
 from splunklib.binding import namespace as namespace
@@ -28,7 +30,7 @@ def call_workato(payload, allow_insecure_callback):
     sid = payload.get('sid')
 
     def log(level, msg):
-        print >> sys.stderr, "%s sid=\"%s\" %s" % (level, sid, msg)
+        print("%s sid=\"%s\" %s" % (level, sid, msg), file=sys.stderr)
 
     def log_info(msg):
         log("INFO", msg)
@@ -58,13 +60,13 @@ def call_workato(payload, allow_insecure_callback):
                     log_error("insecure callback url: \"%s\"" %
                               callback_url)
                 else:
-                    req = urllib2.Request(callback_url, json.dumps(data), {
+                    req = six.moves.urllib.request.Request(callback_url, json.dumps(data), {
                         "Content-Type": "application/json"})
-                    res = urllib2.urlopen(req)
+                    res = six.moves.urllib.request.urlopen(req)
                     body_bytes = len(str(res.read()))
                     log_info("callback=\"%s\" status=%d body_length=\"%d\"" % (
                         callback_url, res.code, body_bytes))
-            except urllib2.HTTPError, e:
+            except six.moves.urllib.error.HTTPError as e:
                 callback_invocation_errors += 1
                 log_error("callback=\"%s\" error=\"%s\"" %
                           (callback_url, str(e)))
@@ -75,7 +77,7 @@ def call_workato(payload, allow_insecure_callback):
             reader = csv.DictReader(csv_file)
             for row in reader:
                 payload = {}
-                for name, value in row.iteritems():
+                for name, value in row.items():
                     if not name.startswith('__mv'):
                         payload[name] = value
                 invoke_callbacks(payload)
@@ -95,5 +97,6 @@ if __name__ == "__main__":
             allow_insecure_callback = True
         call_workato(payload, allow_insecure_callback)
     else:
-        print >> sys.stderr, "FATAL Unsupported execution mode (expected --execute flag)"
+        print("FATAL Unsupported execution mode (expected --execute flag)",
+              file=sys.stderr)
         sys.exit(1)

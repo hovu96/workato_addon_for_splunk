@@ -13,14 +13,14 @@ class SavedSearchesHandler(BaseRestHandler):
         s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=0")
 
-        def filter(search):
+        def filter_search(search):
             if search.access.app == workato_app_name:
                 return False
             if search.name.startswith("__"):
                 return False
             return True
         self.send_json_response(
-            [search.name for search in saved_searches if filter(search)]
+            [search.name for search in saved_searches if filter_search(search)]
         )
 
     def handle_POST(self):

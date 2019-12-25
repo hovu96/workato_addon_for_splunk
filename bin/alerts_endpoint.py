@@ -8,14 +8,14 @@ class AlertsHandler(BaseRestHandler):
     def handle_GET(self):
         s = self.create_service()
         saved_searches = s.saved_searches.list(search="is_scheduled=1")
-        def filter(search):
+        def filter_search(search):
             if search.access.app==workato_app_name:
                 return False
             if search.name.startswith("__"):
                 return False
             return has_workato_alert_action(search)
         self.send_json_response(
-            [ search.name for search in saved_searches if filter(search) ]
+            [ search.name for search in saved_searches if filter_search(search) ]
         )
     def handle_POST(self):
         payload = json.loads(self.request['payload'])
